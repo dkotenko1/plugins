@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: transparent; overflow: hidden; font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; }
+  #stage { width: 100%; height: 100%; display: flex; align-items: center; overflow: hidden; }
+  #track { display: flex; white-space: nowrap; animation: scroll 32s linear infinite; will-change: transform; }
+  @keyframes scroll {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-50%); }
+  }
+  .item { display: inline-flex; align-items: center; padding: 0 18px; font-size: 12px; color: #0B042A; }
+  .item .carrier { font-weight: 700; margin-right: 6px; }
+  .item .badge { display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 700; }
+  .badge-up { background: rgba(244,125,13,.16); color: #B85C08; }
+  .badge-down { background: rgba(94,224,224,.25); color: #0B7A7A; }
+  .sep { color: #DCE4EE; margin: 0 10px; }
+</style>
+</head>
+<body>
+<div id="stage"><div id="track"></div></div>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<script>
+(function () {
+  var client = (window.sigmaComputing && window.sigmaComputing.plugin)
+    ? window.sigmaComputing.plugin.client : null;
+
+  function synth() {
+    return [
+      { carrier: "FedEx", change: "GRI Announced", date: "01/15/27", impact: 5.9 },
+      { carrier: "UPS", change: "Peak Surcharge Update", date: "10/01/26", impact: 3.2 },
+      { carrier: "DHL", change: "Fuel Surcharge Adjustment", date: "09/01/26", impact: 1.4 },
+      { carrier: "USPS", change: "Zone Pricing Revision", date: "01/20/27", impact: 2.7 },
+      { carrier: "Regional Carrier", change: "Dimensional Weight Update", date: "11/01/26", impact: -1.1 },
+      { carrier: "FedEx", change: "Peak Season Surcharge", date: "10/15/26", impact: 4.4 },
+    ];
+  }
+
+  function renderItems(rows) {
+    var html = "";
+    // duplicate the sequence once so the -50% keyframe loops seamlessly
+    for (var pass = 0; pass < 2; pass++) {
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        var up = Number(r.impact) >= 0;
+        html += "<span class=\"item\">" +
+          "<span class=\"carrier\">" + r.carrier + "</span>" +
+          r.change + " &middot; eff. " + r.date + " " +
+          "<span class=\"badge " + (up ? "badge-up" : "badge-down") + "\">" +
+          (up ? "+" : "") + Number(r.impact).toFixed(1) + "%</span>" +
+          "<span class=\"sep\">&bull;</span></span>";
+      }
+    }
+    document.getElementById("track").innerHTML = html;
+  }
+
+  // Guarded lookup -- see sifted-carrier-grid/index.html for why this matters:
+  // an unguarded window.sigmaComputing.plugin.client throws and blanks the
+  // whole tile, including this synth() fallback, if left unguarded.
+  if (client) {
+    client.config.configureEditorPanel([
+      { name: "source", type: "element" },
+      { name: "carrier", type: "column", source: "source", allowedTypes: ["text"], label: "Carrier" },
+      { name: "change", type: "column", source: "source", allowedTypes: ["text"], label: "Change Type" },
+      { name: "date", type: "column", source: "source", allowedTypes: ["text"], label: "Effective Date" },
+      { name: "impact", type: "column", source: "source", allowedTypes: ["number"], label: "Impact %" },
+    ]);
+    var unsub = null;
+    client.config.subscribe(function (cfg) {
+      if (unsub) { unsub(); unsub = null; }
+      if (cfg && cfg.source && cfg.carrier) {
+        unsub = client.elements.subscribeToElementData(cfg.source, function (d) {
+          try {
+            var carrier = d[cfg.carrier] || [];
+            var change = d[cfg.change] || [];
+            var date = d[cfg.date] || [];
+            var impact = d[cfg.impact] || [];
+            var rows = [];
+            for (var i = 0; i < carrier.length; i++) {
+              rows.push({ carrier: carrier[i], change: change[i], date: date[i], impact: impact[i] });
+            }
+            renderItems(rows.length ? rows : synth());
+          } catch (e) {
+            renderItems(synth());
+          }
+        });
+      } else {
+        renderItems(synth());
+      }
+    });
+  } else {
+    renderItems(synth());
+  }
+})();
+</script>
+</body>
+</html>

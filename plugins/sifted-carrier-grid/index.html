@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; background: transparent; }
+  #stage { width: 100%; height: 100%; box-sizing: border-box; padding: 10px 14px; }
+  .grid-title { font-size: 12px; font-weight: 700; letter-spacing: .04em; color: #0B042A; text-transform: uppercase; margin-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; color: #5B6B7F; font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: .03em; padding: 4px 8px; border-bottom: 1px solid #DCE4EE; }
+  td { padding: 6px 8px; color: #0B042A; border-bottom: 1px solid #F0F3F8; }
+  .bar-cell { position: relative; }
+  .bar-track { position: relative; height: 14px; background: #F0F3F8; border-radius: 7px; overflow: hidden; min-width: 60px; }
+  .bar-fill { position: absolute; left: 0; top: 0; height: 100%; border-radius: 7px; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10.5px; font-weight: 700; }
+  .pill-ahead { background: rgba(94,224,224,.25); color: #0B7A7A; }
+  .pill-plan { background: rgba(46,163,242,.18); color: #1668A8; }
+  .pill-behind { background: rgba(244,125,13,.16); color: #B85C08; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="grid-title">Carrier Compliance &amp; Savings Recovery Grid</div>
+  <div id="gridHost"></div>
+</div>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<script>
+(function () {
+  var client = (window.sigmaComputing && window.sigmaComputing.plugin)
+    ? window.sigmaComputing.plugin.client : null;
+
+  var COLS = ["Carrier", "Savings Recovered %", "Contract Compliance %", "GRI Exposure %", "Status"];
+
+  function synth() {
+    return [
+      ["UPS", 7.8, 96.4, 4.2, "Ahead"],
+      ["FedEx", 6.1, 92.1, 6.4, "On plan"],
+      ["USPS", 5.4, 98.2, 2.1, "Ahead"],
+      ["DHL", 4.9, 89.7, 3.8, "Behind"],
+      ["Regional / Other", 8.6, 94.5, 1.6, "Ahead"],
+    ];
+  }
+
+  function pillClass(status) {
+    var s = String(status || "").toLowerCase();
+    if (s.indexOf("ahead") >= 0) return "pill-ahead";
+    if (s.indexOf("behind") >= 0) return "pill-behind";
+    return "pill-plan";
+  }
+
+  function barColor(pct) {
+    if (pct >= 7) return "#5EE0E0";
+    if (pct >= 5) return "#2EA3F2";
+    return "#F47D0D";
+  }
+
+  function render(rows) {
+    var host = document.getElementById("gridHost");
+    var html = "<table><thead><tr>";
+    for (var c = 0; c < COLS.length; c++) html += "<th>" + COLS[c] + "</th>";
+    html += "</tr></thead><tbody>";
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var savedPct = Math.max(0, Math.min(100, (Number(r[1]) || 0) * 8));
+      html += "<tr>";
+      html += "<td>" + r[0] + "</td>";
+      html += "<td class=\"bar-cell\"><div class=\"bar-track\"><div class=\"bar-fill\" style=\"width:" +
+              savedPct + "%;background:" + barColor(Number(r[1])) + "\"></div></div> " + Number(r[1]).toFixed(1) + "%</td>";
+      html += "<td>" + Number(r[2]).toFixed(1) + "%</td>";
+      html += "<td>" + Number(r[3]).toFixed(1) + "%</td>";
+      html += "<td><span class=\"pill " + pillClass(r[4]) + "\">" + r[4] + "</span></td>";
+      html += "</tr>";
+    }
+    html += "</tbody></table>";
+    host.innerHTML = html;
+  }
+
+  // Guard: an unguarded window.sigmaComputing.plugin.client lookup throws and
+  // blanks the WHOLE tile (including this synth() fallback) when the host
+  // bridge isn't ready -- every client.* call stays behind `if (client)`.
+  if (client) {
+    client.config.configureEditorPanel([
+      { name: "source", type: "element" },
+      { name: "carrier", type: "column", source: "source", allowedTypes: ["text"], label: "Carrier" },
+      { name: "saved", type: "column", source: "source", allowedTypes: ["number"], label: "Savings Recovered %" },
+      { name: "compliance", type: "column", source: "source", allowedTypes: ["number"], label: "Contract Compliance %" },
+      { name: "gri", type: "column", source: "source", allowedTypes: ["number"], label: "GRI Exposure %" },
+      { name: "status", type: "column", source: "source", allowedTypes: ["text"], label: "Status" },
+    ]);
+    var unsub = null;
+    client.config.subscribe(function (cfg) {
+      if (unsub) { unsub(); unsub = null; }
+      if (cfg && cfg.source && cfg.carrier) {
+        unsub = client.elements.subscribeToElementData(cfg.source, function (d) {
+          try {
+            var carrier = d[cfg.carrier] || [];
+            var saved = d[cfg.saved] || [];
+            var compliance = d[cfg.compliance] || [];
+            var gri = d[cfg.gri] || [];
+            var status = d[cfg.status] || [];
+            var rows = [];
+            for (var i = 0; i < carrier.length; i++) {
+              rows.push([carrier[i], saved[i], compliance[i], gri[i], status[i]]);
+            }
+            render(rows.length ? rows : synth());
+          } catch (e) {
+            render(synth());
+          }
+        });
+      } else {
+        render(synth());
+      }
+    });
+  } else {
+    render(synth());
+  }
+})();
+</script>
+</body>
+</html>
