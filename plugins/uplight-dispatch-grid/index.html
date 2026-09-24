@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Dispatch &amp; Enrollment Grid — Uplight Sigma Plugin</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,Arial,sans-serif;
+       background:transparent;color:#0A2A66;overflow:hidden}
+  #wrap{height:100%;width:100%;display:flex;flex-direction:column;padding:10px 14px;gap:6px}
+  #top{display:flex;justify-content:space-between;align-items:baseline;flex:0 0 auto}
+  #ttl{font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#074EFF}
+  #meta{font-size:11px;color:#5A7096}
+  #meta b{color:#0A2A66}
+  #stage{flex:1;min-height:0;position:relative}
+  svg{width:100%;height:100%;display:block}
+  .cell{cursor:default}
+  .cell:hover{stroke:#0A2A66;stroke-width:1.5}
+  #legend{flex:0 0 auto;display:flex;align-items:center;gap:10px;font-size:10px;color:#5A7096}
+  #legend .grad{width:90px;height:8px;border-radius:4px;
+       background:linear-gradient(90deg,#EAF3FF,#00E4A0)}
+  #tip{position:fixed;pointer-events:none;background:#061B42;border:1px solid #2E8BFF;
+       border-radius:8px;padding:8px 10px;font-size:11px;color:#EAF2FB;opacity:0;
+       transition:opacity .1s;z-index:10;white-space:nowrap;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+  #tip b{color:#7FC7FF}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="top">
+    <div id="ttl">Dispatch &amp; enrollment grid</div>
+    <div id="meta">peak hour <b id="peak">—</b> · MW dispatched today <b id="tot">—</b></div>
+  </div>
+  <div id="stage"><svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg></div>
+  <div id="legend">
+    <span class="grad"></span>
+    <span>MW dispatched, low → high</span>
+    <span style="color:#00B386">rows are program lines · columns are hour of day</span>
+  </div>
+</div>
+<div id="tip"></div>
+<script>
+(function(){
+  var client=(window.sigmaComputing&&window.sigmaComputing.plugin&&window.sigmaComputing.plugin.client)||null;
+
+  var defs=[
+    {name:'source',type:'element'},
+    {name:'hour',type:'column',source:'source',allowedTypes:['number','integer'],label:'Hour of day'},
+    {name:'program',type:'column',source:'source',label:'Program line'},
+    {name:'enrolled',type:'column',source:'source',allowedTypes:['number','integer'],label:'MW enrolled'},
+    {name:'dispatched',type:'column',source:'source',allowedTypes:['number','integer'],label:'MW dispatched'},
+    {name:'events',type:'column',source:'source',allowedTypes:['number','integer'],label:'Dispatch events'}
+  ];
+  if(client) client.config.configureEditorPanel(defs);
+
+  var NS='http://www.w3.org/2000/svg';
+  function el(n,a){var e=document.createElementNS(NS,n);for(var k in a)e.setAttribute(k,a[k]);return e;}
+  function num(v){return (Math.round(Number(v)||0)).toLocaleString();}
+  function hr(h){ h=Number(h)||0; var s=h%12===0?12:h%12; return s+(h<12?'a':'p'); }
+
+  var tip=document.getElementById('tip');
+  function bind(node,html){
+    node.addEventListener('mousemove',function(e){
+      tip.innerHTML=html; tip.style.opacity=1;
+      tip.style.left=Math.min(window.innerWidth-tip.offsetWidth-10,e.clientX+14)+'px';
+      tip.style.top=Math.max(8,e.clientY-tip.offsetHeight-12)+'px';
+    });
+    node.addEventListener('mouseleave',function(){tip.style.opacity=0;});
+  }
+
+  // Colour ramp from pale blue (idle) to Uplight mint (fully dispatched).
+  function ramp(t){
+    t=Math.max(0,Math.min(1,t));
+    var c0=[234,243,255], c1=[0,228,160];
+    var r=Math.round(c0[0]+(c1[0]-c0[0])*t);
+    var g=Math.round(c0[1]+(c1[1]-c0[1])*t);
+    var b=Math.round(c0[2]+(c1[2]-c0[2])*t);
+    return 'rgb('+r+','+g+','+b+')';
+  }
+
+  function draw(rows){
+    var svg=document.getElementById('svg');
+    while(svg.firstChild) svg.removeChild(svg.firstChild);
+    var st=document.getElementById('stage');
+    var W=Math.max(320,st.clientWidth), H=Math.max(140,st.clientHeight);
+    svg.setAttribute('viewBox','0 0 '+W+' '+H);
+
+    var programs=[];
+    rows.forEach(function(r){ if(programs.indexOf(r.program)===-1) programs.push(r.program); });
+    if(!programs.length) programs=['Demand Response','VPP'];
+
+    var grid={};
+    programs.forEach(function(p){ grid[p]=new Array(24).fill(0); });
+    var enr={};
+    programs.forEach(function(p){ enr[p]=new Array(24).fill(0); });
+    var evt={};
+    programs.forEach(function(p){ evt[p]=new Array(24).fill(0); });
+
+    var maxV=1, tot=0, peak={v:-1,h:0};
+    rows.forEach(function(r){
+      var h=Math.max(0,Math.min(23,Math.round(r.hour)));
+      if(grid[r.program]===undefined) return;
+      grid[r.program][h]+=r.dispatched;
+      enr[r.program][h]+=r.enrolled;
+      evt[r.program][h]+=r.events;
+      maxV=Math.max(maxV,grid[r.program][h]);
+      tot+=r.dispatched;
+    });
+    for(var h=0;h<24;h++){
+      var band=0;
+      programs.forEach(function(p){ band+=grid[p][h]; });
+      if(band>peak.v){peak.v=band;peak.h=h;}
+    }
+    document.getElementById('peak').textContent=hr(peak.h)+' ('+num(peak.v)+' MW)';
+    document.getElementById('tot').textContent=num(tot)+' MW';
+
+    var padL=118, padR=8, padT=8, padB=22;
+    var plotW=W-padL-padR, plotH=H-padT-padB;
+    var rows_n=programs.length;
+    var rh=plotH/rows_n, bw=plotW/24, gap=Math.min(2,bw*0.12);
+
+    for(var h=0;h<24;h+=3){
+      var tx=padL+h*bw+bw/2;
+      var t=el('text',{x:tx,y:H-6,'text-anchor':'middle','font-size':10,fill:'#5A7096'});
+      t.textContent=hr(h); svg.appendChild(t);
+    }
+
+    programs.forEach(function(p,pi){
+      var ly=padT+pi*rh+rh/2+4;
+      var lab=el('text',{x:padL-10,y:ly,'text-anchor':'end','font-size':11,
+                         'font-weight':700,fill:'#0A2A66'});
+      lab.textContent=p; svg.appendChild(lab);
+      for(var h=0;h<24;h++){
+        var v=grid[p][h], t2=v/maxV;
+        var x=padL+h*bw+gap/2, y=padT+pi*rh+gap/2;
+        var w=Math.max(1,bw-gap), hgt=Math.max(1,rh-gap);
+        var rc=el('rect',{x:x,y:y,width:w,height:hgt,rx:2,fill:ramp(t2),class:'cell'});
+        svg.appendChild(rc);
+        bind(rc,'<b>'+p+' · '+hr(h)+'</b><br>'+num(v)+' MW dispatched of '+
+                num(enr[p][h])+' MW enrolled<br>'+num(evt[p][h])+' dispatch events');
+      }
+    });
+
+    var px=padL+peak.h*bw+bw/2;
+    svg.appendChild(el('line',{x1:px,y1:padT,x2:px,y2:H-padB,stroke:'#00B386',
+                              'stroke-width':1,'stroke-dasharray':'3 3'}));
+  }
+
+  function synth(){
+    var dr=[0,0,0,0,0,4,18,34,22,30,44,26,36,52,30,40,58,64,72,60,38,20,8,2];
+    var vpp=[0,0,0,0,2,10,24,30,18,22,32,20,26,38,24,30,44,52,60,48,28,14,6,1];
+    var out=[];
+    for(var h=0;h<24;h++){
+      out.push({hour:h,program:'Demand Response',enrolled:Math.round(dr[h]*1.6+20),
+                dispatched:dr[h],events:dr[h]>0?Math.max(1,Math.round(dr[h]/12)):0});
+      out.push({hour:h,program:'VPP',enrolled:Math.round(vpp[h]*1.5+14),
+                dispatched:vpp[h],events:vpp[h]>0?Math.max(1,Math.round(vpp[h]/9)):0});
+    }
+    return out;
+  }
+
+  var S={cfg:{},data:null,unsub:null};
+  function recompute(){
+    var c=S.cfg||{},d=S.data,rows=null;
+    if(d&&c.hour&&d[c.hour]){
+      var hh=d[c.hour]||[],pp=d[c.program]||[],ee=d[c.enrolled]||[],
+          dd=d[c.dispatched]||[],vv=d[c.events]||[];
+      rows=[];
+      for(var i=0;i<hh.length;i++){
+        rows.push({hour:Number(hh[i])||0,program:String(pp[i]||''),
+                   enrolled:Number(ee[i])||0,dispatched:Number(dd[i])||0,
+                   events:Number(vv[i])||0});
+      }
+      if(!rows.length||!rows.some(function(r){return r.dispatched>0;})) rows=null;
+    }
+    draw(rows||synth());
+  }
+
+  if(client){
+    client.config.subscribe(function(cfg){
+      S.cfg=cfg||{};
+      if(S.unsub){S.unsub();S.unsub=null;}
+      if(cfg&&cfg.source){
+        S.unsub=client.elements.subscribeToElementData(cfg.source,function(dd){S.data=dd;recompute();});
+      }
+      recompute();
+    });
+  } else { recompute(); }
+
+  // ResizeObserver, not window resize — Sigma resizes the element, not the page.
+  // No animation loop, so headless PNG export can reach idle.
+  if(window.ResizeObserver){
+    new ResizeObserver(function(){recompute();}).observe(document.getElementById('stage'));
+  }
+})();
+</script>
+</body>
+</html>
