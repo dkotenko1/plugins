@@ -1,0 +1,236 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Invoice Exception Aging &amp; Recovery Window</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  :root{
+    --navy:#112245; --ink:#0d1a36; --accent:#0686FF; --light:#A5D3FF;
+    --line:#DCE4EE; --slate:#5B6B7F; --paper:#FFFFFF;
+    --ok:#17B8A6; --warn:#E8A33D; --bad:#EF4444;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:transparent;
+            font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+            color:var(--ink);-webkit-font-smoothing:antialiased}
+  #stage{padding:14px 16px 12px}
+  .hd{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:2px}
+  .ttl{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--navy)}
+  .sub{font-size:11px;color:var(--slate)}
+  .tot{font-size:11px;color:var(--slate)}
+  .tot b{color:var(--navy);font-size:13px}
+  table{border-collapse:separate;border-spacing:3px;width:100%;margin-top:8px}
+  th{font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+     color:var(--slate);text-align:center;padding:2px 4px;white-space:nowrap}
+  th.rowhd{text-align:left;width:27%}
+  td.rowhd{font-size:11.5px;font-weight:600;color:var(--navy);
+           text-align:left;padding:0 8px 0 2px;white-space:nowrap;
+           overflow:hidden;text-overflow:ellipsis;max-width:0}
+  td.cell{height:34px;border-radius:5px;text-align:center;vertical-align:middle;
+          font-size:11.5px;font-weight:600;font-variant-numeric:tabular-nums;
+          border:1px solid rgba(17,34,69,.06)}
+  td.cell.zero{color:#B6C2D2;background:#F6F8FB;border-color:#EEF2F7}
+  .legend{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:10px;color:var(--slate)}
+  .ramp{display:flex;height:7px;flex:0 0 120px;border-radius:4px;overflow:hidden}
+  .ramp i{flex:1}
+  .win{margin-left:auto;display:flex;align-items:center;gap:6px}
+  .win .chip{display:inline-block;width:9px;height:9px;border-radius:2px;
+             border:1.5px dashed var(--bad);background:rgba(239,68,68,.08)}
+  td.cell.lapsing{border:1.5px dashed var(--bad)}
+  .empty{padding:26px 4px;font-size:12px;color:var(--slate);text-align:center}
+</style>
+<div id="stage"></div>
+<script>
+(function(){
+  "use strict";
+
+  var BUCKETS = ["0-7 d","8-14 d","15-30 d","31-60 d","60+ d"];
+  // A disputed contingent-labour invoice stops being recoverable once it falls
+  // outside the supplier agreement's dispute window (commonly 60 days), so the
+  // last bucket is marked as lapsing rather than just "old".
+  var LAPSING = BUCKETS.length - 1;
+
+  function money(v){
+    if (v == null || isNaN(v)) return "";
+    var a = Math.abs(v);
+    if (a >= 1e6) return "$" + (v/1e6).toFixed(a >= 1e7 ? 0 : 1) + "M";
+    if (a >= 1e3) return "$" + Math.round(v/1e3) + "K";
+    return "$" + Math.round(v);
+  }
+
+  // Sequential ramp, brand light -> brand accent -> navy. Sequential (not
+  // diverging) because $-at-risk has a meaningful zero and no natural midpoint.
+  var RAMP = ["#EAF4FF","#C8E2FF","#93C9FF","#4BA5FB","#0686FF","#0A5FB8","#112245"];
+
+  function shade(v, max){
+    if (!v || !max) return null;
+    var t = Math.pow(v / max, 0.65);                  // gamma-lift: without it
+    var i = Math.min(RAMP.length - 1,                 // one huge cell flattens
+                     Math.max(0, Math.round(t * (RAMP.length - 1))));
+    return RAMP[i];
+  }
+  function ink(hexIndexColor){
+    // White text only once the fill is dark enough to carry it.
+    var i = RAMP.indexOf(hexIndexColor);
+    return i >= 4 ? "#FFFFFF" : "var(--navy)";
+  }
+
+  function synth(){
+    var reasons = [
+      "Rate-card breach",
+      "Hours exceed PO / SOW cap",
+      "Duplicate timesheet line",
+      "Missing manager approval",
+      "Off-contract supplier",
+      "Markup / tax mismatch"
+    ];
+    // Deliberately front-loaded: a healthy AP queue is heaviest in the newest
+    // bucket. The demo data still leaves real money in 60+ to make the
+    // recovery-window point visible.
+    var shape = [
+      [412000, 268000, 151000,  74000,  21000],
+      [305000, 197000, 122000,  88000,  34000],
+      [148000,  96000,  61000,  29000,   8000],
+      [226000, 181000, 134000, 102000,  57000],
+      [ 97000,  72000,  55000,  41000,  26000],
+      [ 63000,  48000,  37000,  22000,  11000]
+    ];
+    return reasons.map(function(r, i){ return {label: r, vals: shape[i]}; });
+  }
+
+  var current = synth();
+
+  function render(rows){
+    var stage = document.getElementById("stage");
+    if (!rows || !rows.length){
+      stage.innerHTML = '<div class="empty">No invoice exceptions in the current selection.</div>';
+      return;
+    }
+
+    var max = 0, total = 0, lapsing = 0;
+    rows.forEach(function(r){
+      r.vals.forEach(function(v, j){
+        if (v > max) max = v;
+        total += (v || 0);
+        if (j >= LAPSING) lapsing += (v || 0);
+      });
+    });
+
+    var h = ['<div class="hd">',
+             '<div><div class="ttl">Invoice exception aging</div>',
+             '<div class="sub">$ at risk by exception reason and age</div></div>',
+             '<div class="tot">open exceptions<br><b>', money(total), '</b></div>',
+             '</div>'];
+
+    h.push('<table><thead><tr><th class="rowhd">Exception reason</th>');
+    BUCKETS.forEach(function(b){ h.push('<th>', b, '</th>'); });
+    h.push('</tr></thead><tbody>');
+
+    rows.forEach(function(r){
+      h.push('<tr><td class="rowhd" title="', esc(r.label), '">', esc(r.label), '</td>');
+      r.vals.forEach(function(v, j){
+        var c = shade(v, max);
+        if (!c){
+          h.push('<td class="cell zero">--</td>');
+        } else {
+          h.push('<td class="cell', j >= LAPSING ? ' lapsing' : '',
+                 '" style="background:', c, ';color:', ink(c), '">', money(v), '</td>');
+        }
+      });
+      h.push('</tr>');
+    });
+    h.push('</tbody></table>');
+
+    h.push('<div class="legend"><span>Lower $</span><span class="ramp">');
+    RAMP.forEach(function(c){ h.push('<i style="background:', c, '"></i>'); });
+    h.push('</span><span>Higher $</span>',
+           '<span class="win"><span class="chip"></span>',
+           'outside the 60-day dispute window — <b>', money(lapsing), '</b> unrecoverable if not worked',
+           '</span></div>');
+
+    stage.innerHTML = h.join("");
+  }
+
+  function esc(s){
+    return String(s == null ? "" : s)
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+
+  // Sigma sizes the panel after the script's first paint, so a load-time-only
+  // measurement draws at a stale width. A ResizeObserver alone is not enough:
+  // it fires once on observe, possibly pre-layout, and because render() only
+  // rewrites #stage's inner HTML the element never resizes itself again, so no
+  // correcting pass arrives. This block sits ABOVE the SDK check on purpose --
+  // otherwise the synthetic fallback renders once and stays stuck at whatever
+  // width the first paint saw.
+  var redraw = function(){ render(current); };
+  if (window.ResizeObserver){
+    new ResizeObserver(redraw).observe(document.getElementById("stage"));
+  }
+  window.addEventListener("resize", redraw);
+  window.addEventListener("load", function(){ requestAnimationFrame(redraw); });
+  requestAnimationFrame(redraw);
+
+  // ---------------- Sigma wiring ----------------
+  // Guard the client: on the CDN the SDK can be absent or fail to initialise,
+  // and reading `.client` off undefined throws before first paint, which blanks
+  // the whole tile rather than degrading to the synthetic view.
+  var client = (window.sigmaComputing && window.sigmaComputing.plugin)
+    ? window.sigmaComputing.plugin.client : null;
+
+  if (!client){ render(current); return; }
+
+  client.config.configureEditorPanel([
+    {name:"source", type:"element"},
+    {name:"reason", type:"column", source:"source", allowedTypes:["text"],
+     label:"Exception reason"},
+    {name:"bucket", type:"column", source:"source", allowedTypes:["text"],
+     label:"Aging bucket"},
+    {name:"amount", type:"column", source:"source", allowedTypes:["number"],
+     label:"$ at risk"}
+  ]);
+
+  function col(data, cfg, key){
+    var id = cfg[key];
+    return (id && data && data[id]) ? data[id] : null;
+  }
+
+  // The bound element is long-form (one row per reason x bucket); pivot it here
+  // rather than requiring a pivot-table upstream, so the plugin can sit
+  // directly on the same base table every other element on the page uses.
+  function toRows(data, cfg){
+    var reason = col(data, cfg, "reason"),
+        bucket = col(data, cfg, "bucket"),
+        amount = col(data, cfg, "amount");
+    if (!reason || !reason.length) return null;
+
+    var order = [], byReason = {};
+    for (var i = 0; i < reason.length; i++){
+      var rk = reason[i];
+      if (rk == null) continue;
+      if (!byReason[rk]){
+        byReason[rk] = {label: rk, vals: BUCKETS.map(function(){ return 0; }), tot: 0};
+        order.push(rk);
+      }
+      var bi = bucket ? BUCKETS.indexOf(bucket[i]) : -1;
+      var amt = amount ? (+amount[i] || 0) : 0;
+      // An unrecognised bucket label would otherwise vanish silently; fold it
+      // into the newest column so the row total still reconciles.
+      byReason[rk].vals[bi < 0 ? 0 : bi] += amt;
+      byReason[rk].tot += amt;
+    }
+    return order.map(function(k){ return byReason[k]; })
+                .sort(function(a, b){ return b.tot - a.tot; });
+  }
+
+  var unsub = null;
+  client.config.subscribe(function(cfg){
+    if (unsub) unsub();
+    if (!cfg || !cfg.source) return;
+    unsub = client.elements.subscribeToElementData(cfg.source, function(data){
+      var rows = toRows(data, cfg);
+      current = rows && rows.length ? rows : synth();
+      render(current);
+    });
+  });
+})();
+</script>
