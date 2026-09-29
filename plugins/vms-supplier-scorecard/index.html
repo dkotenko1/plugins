@@ -52,6 +52,9 @@
   .sw{width:9px;height:9px;border-radius:2px;display:inline-block}
   .tk{width:2px;height:11px;background:var(--navy);display:inline-block}
   .empty{padding:22px;text-align:center;color:var(--muted);font-size:12px}
+  .synth{display:inline-block;margin-right:6px;padding:1px 5px;border-radius:3px;
+         background:#FDF0D5;color:#8A5A00;font-weight:700;font-size:9px;
+         letter-spacing:.06em;text-transform:uppercase;vertical-align:1px}
 </style>
 </head>
 <body>
@@ -63,7 +66,10 @@
   // ---- synthetic fallback so the plugin reads correctly unbound (editor,
   // config handshake, and headless export which snapshots before the
   // round-trip finishes). Shape mirrors the bound contract exactly.
+  var IS_SYNTH = false;
+
   function synth(){
+    IS_SYNTH = true;
     return [
       {supplier:"Apex Systems",       fill:0.94, target:0.90, ttf:11, reqs:412, spend:24.8, comp:0.97},
       {supplier:"Insight Global",     fill:0.91, target:0.90, ttf:13, reqs:338, spend:19.2, comp:0.95},
@@ -150,8 +156,11 @@
       '<span class="lg"><span class="sw" style="background:var(--amber)"></span>Watch</span>' +
       '<span class="lg"><span class="sw" style="background:var(--red)"></span>SLA breach</span>' +
       (HAS_TARGET ? '<span class="lg"><span class="tk"></span>Fill-rate SLA target</span>' : '') +
-      '<span class="lg" style="margin-left:auto">Bar = <b>fill rate</b> &middot; ' +
-      'sparkline = 10-week trend</span>';
+      '<span class="lg" style="margin-left:auto">' +
+      (IS_SYNTH ? '<span class="synth">sample data</span>illustrative shape, '
+                + 'not bound to a source'
+                : 'Bar = <b>fill rate</b> &middot; sparkline = 10-week trend') +
+      '</span>';
 
     var max = 0;
     rows.forEach(function(d){ if (d.fill > max) max = d.fill; });
@@ -287,18 +296,34 @@
     return out;
   }
 
+  // A code-built spec stores the element binding as an OBJECT
+  // ({kind:"element", elementId:"tbl-hero"}) because that is what
+  // POST /v2/workbooks/spec requires, whereas a binding picked in the editor
+  // panel stores a bare element-id STRING -- and subscribeToElementData only
+  // accepts the string. Passing the object through is silently inert: the
+  // config callback fires, cfg.source is truthy, no data ever arrives, and the
+  // plugin sits on its fallback looking like a data problem rather than a
+  // binding one. Normalise both shapes.
+  function srcId(cfg){
+    var s = cfg && cfg.source;
+    if (!s) return null;
+    return (typeof s === "string") ? s : (s.elementId || s.id || null);
+  }
+
   var unsub = null;
   client.config.subscribe(function(cfg){
     if (unsub){ try{ unsub(); }catch(e){} unsub = null; }
     // No source picked yet in the editor panel is the one case where synth is
     // the right answer -- it shows the author what the tile will look like.
-    if (!cfg || !cfg.source){ current = synth(); render(current); return; }
-    unsub = client.elements.subscribeToElementData(cfg.source, function(data){
+    var sid = srcId(cfg);
+    if (!sid){ current = synth(); render(current); return; }
+    unsub = client.elements.subscribeToElementData(sid, function(data){
       var rows = toRows(data, cfg);
       // An empty result is a real answer (a filter excluded every supplier),
       // so render the empty state rather than reverting to synth -- reverting
       // is how a plugin ends up presenting invented numbers as authoritative.
       gotData = true;
+      IS_SYNTH = false;
       current = rows || [];
       render(current);
     });
