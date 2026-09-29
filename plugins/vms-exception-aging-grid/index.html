@@ -37,6 +37,9 @@
              border:1.5px dashed var(--bad);background:rgba(239,68,68,.08)}
   td.cell.lapsing{border:1.5px dashed var(--bad)}
   .empty{padding:26px 4px;font-size:12px;color:var(--slate);text-align:center}
+  .synth{display:inline-block;margin-right:6px;padding:1px 5px;border-radius:3px;
+         background:#FDF0D5;color:#8A5A00;font-weight:700;font-size:9px;
+         letter-spacing:.06em;text-transform:uppercase;vertical-align:1px}
 </style>
 <div id="stage"></div>
 <script>
@@ -74,7 +77,10 @@
     return i >= 4 ? "#FFFFFF" : "var(--navy)";
   }
 
+  var IS_SYNTH = false;
+
   function synth(){
+    IS_SYNTH = true;
     var reasons = [
       "Rate-card breach",
       "Hours exceed PO / SOW cap",
@@ -122,7 +128,10 @@
 
     var h = ['<div class="hd">',
              '<div><div class="ttl">Invoice exception aging</div>',
-             '<div class="sub">$ at risk by exception reason and age</div></div>',
+             '<div class="sub">', (IS_SYNTH
+               ? '<span class="synth">sample data</span> illustrative shape, not bound to a source'
+               : '$ at risk by exception reason and age'),
+             '</div></div>',
              '<div class="tot">open exceptions<br><b>', money(total), '</b></div>',
              '</div>'];
 
@@ -254,6 +263,7 @@
       // reverting is how a plugin ends up showing invented numbers that look
       // authoritative.
       gotData = true;
+      IS_SYNTH = false;
       current = rows || [];
       render(current);
     });
