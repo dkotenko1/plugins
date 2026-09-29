@@ -116,7 +116,15 @@
     var grid = document.getElementById("grid");
     var legend = document.getElementById("legend");
 
-    if (!rows || !rows.length){
+    if (rows == null){
+      // Bound, waiting on the first data callback. Deliberately not the
+      // empty-state copy, which would read as "this program has no suppliers".
+      grid.className = "";
+      grid.innerHTML = '<div class="empty">Loading supplier scorecard...</div>';
+      legend.innerHTML = "";
+      return;
+    }
+    if (!rows.length){
       grid.className = "";
       grid.innerHTML = '<div class="empty">No supplier rows to display.</div>';
       legend.innerHTML = "";
@@ -194,7 +202,19 @@
     }).join("");
   }
 
-  var current = synth();
+  // ---------------- Sigma wiring ----------------
+  // Resolved up here (not just below) because whether a client EXISTS decides
+  // the starting state: a bound instance must never paint synthetic numbers,
+  // not even for one frame. Warehouse data lands a beat after first paint, so
+  // a synth-first plugin briefly shows invented figures -- and a headless PNG
+  // export captures precisely that frame, which makes every rendered QA shot
+  // silently wrong while looking perfectly plausible.
+  var client = (window.sigmaComputing && window.sigmaComputing.plugin)
+    ? window.sigmaComputing.plugin.client : null;
+
+  var FALLBACK_MS = 2500;
+  var current = client ? null : synth();
+  var gotData = false;
 
   // ---- Resize wiring is registered BEFORE the Sigma handshake, deliberately.
   // Sigma sizes the panel after the script's first paint, so a load-time-only
@@ -213,11 +233,13 @@
   window.addEventListener("load", function(){ requestAnimationFrame(redraw); });
   requestAnimationFrame(redraw);
 
-  // ---------------- Sigma wiring ----------------
-  var client = (window.sigmaComputing && window.sigmaComputing.plugin)
-    ? window.sigmaComputing.plugin.client : null;
+  if (!client){ return; }
 
-  if (!client){ render(current); return; }
+  // A misconfigured binding would otherwise leave the tile on the placeholder
+  // forever, so fall back to synth if no data has arrived by now.
+  setTimeout(function(){
+    if (!gotData && current == null){ current = synth(); render(current); }
+  }, FALLBACK_MS);
 
   client.config.configureEditorPanel([
     {name:"source",   type:"element"},
@@ -268,10 +290,16 @@
   var unsub = null;
   client.config.subscribe(function(cfg){
     if (unsub){ try{ unsub(); }catch(e){} unsub = null; }
+    // No source picked yet in the editor panel is the one case where synth is
+    // the right answer -- it shows the author what the tile will look like.
     if (!cfg || !cfg.source){ current = synth(); render(current); return; }
     unsub = client.elements.subscribeToElementData(cfg.source, function(data){
       var rows = toRows(data, cfg);
-      current = (rows && rows.length) ? rows : synth();
+      // An empty result is a real answer (a filter excluded every supplier),
+      // so render the empty state rather than reverting to synth -- reverting
+      // is how a plugin ends up presenting invented numbers as authoritative.
+      gotData = true;
+      current = rows || [];
       render(current);
     });
   });

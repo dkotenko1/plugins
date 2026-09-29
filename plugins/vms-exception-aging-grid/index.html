@@ -97,11 +97,16 @@
     return reasons.map(function(r, i){ return {label: r, vals: shape[i]}; });
   }
 
-  var current = synth();
 
   function render(rows){
     var stage = document.getElementById("stage");
-    if (!rows || !rows.length){
+    if (rows == null){
+      // Bound, waiting on the first data callback -- deliberately NOT the
+      // empty-state copy, which would read as "there are no exceptions".
+      stage.innerHTML = '<div class="empty">Loading exception queue...</div>';
+      return;
+    }
+    if (!rows.length){
       stage.innerHTML = '<div class="empty">No invoice exceptions in the current selection.</div>';
       return;
     }
@@ -155,13 +160,32 @@
       .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }
 
+  // ---------------- Sigma wiring ----------------
+  // Guard the client: on the CDN the SDK can be absent or fail to initialise,
+  // and reading `.client` off undefined throws before first paint, which blanks
+  // the whole tile rather than degrading to the synthetic view.
+  var client = (window.sigmaComputing && window.sigmaComputing.plugin)
+    ? window.sigmaComputing.plugin.client : null;
+
+  // When the SDK IS present the plugin must NOT paint synthetic numbers, even
+  // for one frame. Warehouse data arrives a beat after first paint, so a
+  // synth-first plugin briefly shows invented figures -- and a headless PNG
+  // export captures exactly that frame, which makes every rendered QA shot
+  // silently wrong. Start bound instances in a neutral placeholder instead and
+  // only fall back to synth if no data has arrived by FALLBACK_MS, so a
+  // genuinely misconfigured binding still shows something rather than a dead
+  // tile. Unbound (standalone preview) starts on synth immediately.
+  var FALLBACK_MS = 2500;
+  var current = client ? null : synth();
+  var gotData = false;
+
   // Sigma sizes the panel after the script's first paint, so a load-time-only
   // measurement draws at a stale width. A ResizeObserver alone is not enough:
   // it fires once on observe, possibly pre-layout, and because render() only
   // rewrites #stage's inner HTML the element never resizes itself again, so no
-  // correcting pass arrives. This block sits ABOVE the SDK check on purpose --
-  // otherwise the synthetic fallback renders once and stays stuck at whatever
-  // width the first paint saw.
+  // correcting pass arrives. This block stays ABOVE the SDK early-return on
+  // purpose -- otherwise the synthetic fallback renders once and stays stuck at
+  // whatever width the first paint saw.
   var redraw = function(){ render(current); };
   if (window.ResizeObserver){
     new ResizeObserver(redraw).observe(document.getElementById("stage"));
@@ -170,14 +194,11 @@
   window.addEventListener("load", function(){ requestAnimationFrame(redraw); });
   requestAnimationFrame(redraw);
 
-  // ---------------- Sigma wiring ----------------
-  // Guard the client: on the CDN the SDK can be absent or fail to initialise,
-  // and reading `.client` off undefined throws before first paint, which blanks
-  // the whole tile rather than degrading to the synthetic view.
-  var client = (window.sigmaComputing && window.sigmaComputing.plugin)
-    ? window.sigmaComputing.plugin.client : null;
+  if (!client){ return; }
 
-  if (!client){ render(current); return; }
+  setTimeout(function(){
+    if (!gotData && !current){ current = synth(); render(current); }
+  }, FALLBACK_MS);
 
   client.config.configureEditorPanel([
     {name:"source", type:"element"},
@@ -228,7 +249,12 @@
     if (!cfg || !cfg.source) return;
     unsub = client.elements.subscribeToElementData(cfg.source, function(data){
       var rows = toRows(data, cfg);
-      current = rows && rows.length ? rows : synth();
+      // An empty result is a real answer (a filter excluded everything), so it
+      // renders the empty state rather than silently reverting to synth --
+      // reverting is how a plugin ends up showing invented numbers that look
+      // authoritative.
+      gotData = true;
+      current = rows || [];
       render(current);
     });
   });
