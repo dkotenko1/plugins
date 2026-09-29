@@ -221,7 +221,12 @@
   var client = (window.sigmaComputing && window.sigmaComputing.plugin)
     ? window.sigmaComputing.plugin.client : null;
 
-  var FALLBACK_MS = 2500;
+  // 6s, not 2.5s: a live tile must have time for the warehouse round trip, or
+  // it labels real data as sample. Deliberately still shorter than a headless
+  // PNG export takes (~20s) -- that renderer never runs the plugin data
+  // subscription at all, so an export always lands here, and a complete grid
+  // tagged "sample data" is a better artifact than a frozen "Loading...".
+  var FALLBACK_MS = 6000;
   var current = client ? null : synth();
   var gotData = false;
 
