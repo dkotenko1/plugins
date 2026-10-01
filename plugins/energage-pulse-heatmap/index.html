@@ -1,0 +1,247 @@
+<!-- ENERGAGE-PULSE-HEATMAP-BUILD-20261001A -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Engagement Pulse Heatmap — Energage Sigma Plugin</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,Arial,sans-serif;
+       background:transparent;color:#300673;overflow:hidden}
+  #wrap{height:100%;width:100%;display:flex;flex-direction:column;padding:10px 14px;gap:6px}
+  #top{display:flex;justify-content:space-between;align-items:baseline;flex:0 0 auto;gap:10px}
+  #ttl{font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#300673}
+  #meta{font-size:11px;color:#5B5170;text-align:right}
+  #meta b{color:#300673}
+  #chip{display:none;font-size:9px;font-weight:800;letter-spacing:.05em;color:#8A2E00;
+        background:#FDECC8;border:1px solid #E8B75A;border-radius:4px;padding:1px 6px;
+        margin-left:8px;vertical-align:middle}
+  #stage{flex:1;min-height:0;position:relative}
+  svg{width:100%;height:100%;display:block}
+  .cell{cursor:default}
+  .cell:hover{stroke:#1F044B;stroke-width:1.5}
+  #loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+           font-size:12px;color:#8077A0}
+  #legend{flex:0 0 auto;display:flex;align-items:center;gap:10px;font-size:10px;color:#5B5170}
+  #legend .grad{width:90px;height:8px;border-radius:4px;
+       background:linear-gradient(90deg,#300673,#00B8F4)}
+  #tip{position:fixed;pointer-events:none;background:#1F044B;border:1px solid #00B8F4;
+       border-radius:8px;padding:8px 10px;font-size:11px;color:#EAF7FE;opacity:0;
+       transition:opacity .1s;z-index:10;white-space:nowrap;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+  #tip b{color:#59D1F8}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="top">
+    <div id="ttl">Engagement pulse heatmap<span id="chip">SAMPLE DATA</span></div>
+    <div id="meta">company avg <b id="avg">—</b> · client companies <b id="tot">—</b></div>
+  </div>
+  <div id="stage"><svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg><div id="loading">Loading…</div></div>
+  <div id="legend">
+    <span class="grad"></span>
+    <span>engagement score, low → high</span>
+    <span style="color:#00B8F4">rows are department · columns are engagement band</span>
+  </div>
+</div>
+<div id="tip"></div>
+<script>
+(function(){
+  var client=(window.sigmaComputing&&window.sigmaComputing.plugin&&window.sigmaComputing.plugin.client)||null;
+
+  var defs=[
+    {name:'source',type:'element'},
+    {name:'department',type:'column',source:'source',label:'Department'},
+    {name:'deptorder',type:'column',source:'source',allowedTypes:['number','integer'],label:'Department order'},
+    {name:'band',type:'column',source:'source',label:'Engagement score band'},
+    {name:'bandorder',type:'column',source:'source',allowedTypes:['number','integer'],label:'Band order'},
+    {name:'score',type:'column',source:'source',allowedTypes:['number','integer'],label:'Avg engagement score'},
+    {name:'companies',type:'column',source:'source',allowedTypes:['number','integer'],label:'Client companies'},
+    {name:'employees',type:'column',source:'source',allowedTypes:['number','integer'],label:'Employees surveyed'}
+  ];
+  if(client) client.config.configureEditorPanel(defs);
+
+  var NS='http://www.w3.org/2000/svg';
+  function el(n,a){var e=document.createElementNS(NS,n);for(var k in a)e.setAttribute(k,a[k]);return e;}
+  function num(v){return (Math.round(Number(v)||0)).toLocaleString();}
+
+  var tip=document.getElementById('tip');
+  function bind(node,html){
+    node.addEventListener('mousemove',function(e){
+      tip.innerHTML=html; tip.style.opacity=1;
+      tip.style.left=Math.min(window.innerWidth-tip.offsetWidth-10,e.clientX+14)+'px';
+      tip.style.top=Math.max(8,e.clientY-tip.offsetHeight-12)+'px';
+    });
+    node.addEventListener('mouseleave',function(){tip.style.opacity=0;});
+  }
+
+  // Energage brand ramp: deep purple (low engagement) -> cyan (high engagement).
+  function ramp(t){
+    t=Math.max(0,Math.min(1,t));
+    var c0=[48,6,115], c1=[0,184,244];
+    var r=Math.round(c0[0]+(c1[0]-c0[0])*t);
+    var g=Math.round(c0[1]+(c1[1]-c0[1])*t);
+    var b=Math.round(c0[2]+(c1[2]-c0[2])*t);
+    return 'rgb('+r+','+g+','+b+')';
+  }
+
+  var BAND_ORDER=['At Risk','Engaged','Highly Engaged','Champion'];
+
+  var lastRows=null;
+  function draw(rows){
+    lastRows=rows;
+    document.getElementById('loading').style.display='none';
+    var svg=document.getElementById('svg');
+    while(svg.firstChild) svg.removeChild(svg.firstChild);
+    var st=document.getElementById('stage');
+    var W=Math.max(320,st.clientWidth), H=Math.max(160,st.clientHeight);
+    svg.setAttribute('viewBox','0 0 '+W+' '+H);
+
+    var depts=[];
+    rows.forEach(function(r){ if(depts.indexOf(r.department)===-1) depts.push(r.department); });
+    depts.sort(function(a,b){
+      var ra=rows.filter(function(r){return r.department===a;})[0]||{deptorder:0};
+      var rb=rows.filter(function(r){return r.department===b;})[0]||{deptorder:0};
+      return (ra.deptorder||0)-(rb.deptorder||0);
+    });
+    var bands=[];
+    rows.forEach(function(r){ if(bands.indexOf(r.band)===-1) bands.push(r.band); });
+    bands.sort(function(a,b){
+      var ia=BAND_ORDER.indexOf(a), ib=BAND_ORDER.indexOf(b);
+      if(ia===-1&&ib===-1) return 0;
+      if(ia===-1) return 1;
+      if(ib===-1) return -1;
+      return ia-ib;
+    });
+    if(!depts.length) depts=['Sales'];
+    if(!bands.length) bands=BAND_ORDER;
+
+    var grid={};
+    depts.forEach(function(d){ grid[d]={}; });
+    var totCompanies=0, totEmployees=0, scoreSum=0, scoreN=0;
+    rows.forEach(function(r){
+      if(!grid[r.department]) return;
+      grid[r.department][r.band]=r;
+      totCompanies+=r.companies; totEmployees+=r.employees;
+      scoreSum+=r.score*(r.companies||1); scoreN+=(r.companies||1);
+    });
+    document.getElementById('tot').textContent=num(totCompanies);
+    document.getElementById('avg').textContent=(scoreN? (scoreSum/scoreN).toFixed(1):'—');
+
+    var padL=132, padR=10, padT=26, padB=10;
+    var plotW=W-padL-padR, plotH=H-padT-padB;
+    var rowsN=depts.length, colsN=bands.length;
+    var rh=plotH/rowsN, cw=plotW/colsN, gap=Math.min(3,Math.min(rh,cw)*0.08);
+
+    bands.forEach(function(b,bi){
+      var tx=padL+bi*cw+cw/2;
+      var t=el('text',{x:tx,y:padT-10,'text-anchor':'middle','font-size':10,
+                       'font-weight':700,fill:'#5B5170'});
+      t.textContent=b; svg.appendChild(t);
+    });
+
+    depts.forEach(function(d,di){
+      var ly=padT+di*rh+rh/2+4;
+      var lab=el('text',{x:padL-10,y:ly,'text-anchor':'end','font-size':11,
+                         'font-weight':700,fill:'#300673'});
+      lab.textContent=d; svg.appendChild(lab);
+      bands.forEach(function(b,bi){
+        var cell=grid[d][b];
+        var score=cell?cell.score:0;
+        var x=padL+bi*cw+gap/2, y=padT+di*rh+gap/2;
+        var w=Math.max(1,cw-gap), h=Math.max(1,rh-gap);
+        var rc=el('rect',{x:x,y:y,width:w,height:h,rx:3,
+                          fill:cell?ramp(score/100):'#EDE7F6',class:'cell'});
+        svg.appendChild(rc);
+        if(cell){
+          var st2=el('text',{x:x+w/2,y:y+h/2+4,'text-anchor':'middle','font-size':12,
+                             'font-weight':800,fill: score>60?'#FFFFFF':'#EAF7FE'});
+          st2.textContent=score.toFixed(0); svg.appendChild(st2);
+          bind(rc,'<b>'+d+' · '+b+'</b><br>Avg score '+score.toFixed(1)+
+               '<br>'+num(cell.companies)+' client companies<br>'+num(cell.employees)+' employees surveyed');
+        }
+      });
+    });
+  }
+
+  function synth(){
+    var depts=[['Sales',0],['Engineering & IT',1],['Operations',2],['Customer Support',3],
+               ['HR & People',4],['Finance',5],['Marketing',6],['Field & Manufacturing',7]];
+    var bands=[['At Risk',0,38],['Engaged',1,64],['Highly Engaged',2,78],['Champion',3,91]];
+    var out=[];
+    depts.forEach(function(d,di){
+      bands.forEach(function(b,bi){
+        var jitter=((di*7+bi*13)%9)-4;
+        var score=Math.max(5,Math.min(99,b[2]+jitter));
+        var companies=Math.round(40+ (di%4)*22 + bi*14);
+        var employees=Math.round(companies*(90+ (di*11)%40));
+        out.push({department:d[0],deptorder:d[1],band:b[0],bandorder:b[1],
+                  score:score,companies:companies,employees:employees});
+      });
+    });
+    return out;
+  }
+
+  function showSample(){
+    document.getElementById('chip').style.display='inline-block';
+    draw(synth());
+  }
+
+  var S={cfg:{},data:null,unsub:null,gotData:false,timer:null};
+  function normalizeSource(s){
+    if(!s) return null;
+    return (typeof s==='string') ? s : (s.elementId || s.id || null);
+  }
+  function recompute(){
+    var c=S.cfg||{}, d=S.data, rows=null;
+    if(d && c.department && d[c.department]){
+      var dep=d[c.department]||[], dor=d[c.deptorder]||[], ban=d[c.band]||[],
+          bor=d[c.bandorder]||[], sc=d[c.score]||[], co=d[c.companies]||[], em=d[c.employees]||[];
+      rows=[];
+      for(var i=0;i<dep.length;i++){
+        rows.push({department:String(dep[i]||''), deptorder:Number(dor[i])||0,
+                   band:String(ban[i]||''), bandorder:Number(bor[i])||0,
+                   score:Number(sc[i])||0, companies:Number(co[i])||0,
+                   employees:Number(em[i])||0});
+      }
+      if(!rows.length) rows=null;
+    }
+    if(rows){
+      S.gotData=true;
+      if(S.timer){clearTimeout(S.timer);S.timer=null;}
+      document.getElementById('chip').style.display='none';
+      draw(rows);
+    }
+  }
+
+  if(client){
+    client.config.subscribe(function(cfg){
+      S.cfg=cfg||{};
+      if(S.unsub){S.unsub();S.unsub=null;}
+      var srcId=normalizeSource(cfg&&cfg.source);
+      if(srcId){
+        S.unsub=client.elements.subscribeToElementData(srcId,function(dd){S.data=dd;recompute();});
+      }
+      // Give the real binding a real round trip before giving up. A headless
+      // PNG export window is ~20s; a live subscription round trip is normally
+      // well under that, so 6s is long enough to not race a real bind but
+      // short enough to still land inside the export window as a fallback.
+      if(S.timer) clearTimeout(S.timer);
+      S.timer=setTimeout(function(){ if(!S.gotData) showSample(); }, 6000);
+    });
+  } else {
+    showSample();
+  }
+
+  // ResizeObserver on the stage element, not a window resize listener -- and
+  // no animation loop, so headless PNG export can reach idle.
+  if(window.ResizeObserver){
+    new ResizeObserver(function(){ if(lastRows) draw(lastRows); }).observe(document.getElementById('stage'));
+  }
+})();
+</script>
+</body>
+</html>
