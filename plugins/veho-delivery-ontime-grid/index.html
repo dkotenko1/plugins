@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Delivery On-Time Performance Grid</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  :root{
+    --navy:#1B1F27; --navydeep:#0D0F14; --coral:#E84931; --lcoral:#F4805F;
+    --mint:#2FA88C; --teal:#2D6E7E; --amber:#E1A32D; --red:#EF4444;
+    --ink:#1B1F27; --muted:#5B6472; --line:#E4E1DE;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:transparent;
+    font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+    color:var(--ink);-webkit-font-smoothing:antialiased}
+  #stage{padding:2px 4px 6px;overflow:auto}
+  table.grid{border-collapse:collapse;width:100%;table-layout:fixed}
+  .grid th, .grid td{border:1px solid var(--line);padding:0}
+  .grid th{background:#FBF6F4;font-size:9.5px;font-weight:800;letter-spacing:.3px;
+    text-transform:uppercase;color:var(--muted);padding:6px 4px;text-align:center;
+    white-space:normal;word-break:break-word;line-height:1.15}
+  .corner{background:#FBF6F4}
+  .rowhead{font-size:10.5px;font-weight:700;color:var(--ink);padding:6px 8px !important;
+    text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    background:#FEFCFB}
+  .cell{position:relative;height:46px;text-align:center;vertical-align:middle}
+  .cell .wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;
+    height:100%;gap:1px}
+  .cell .score{font-size:12px;font-weight:800;font-variant-numeric:tabular-nums}
+  .cell .vol{font-size:8.5px;color:rgba(27,31,39,.62);font-weight:600}
+  .cell .flag{position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;
+    background:var(--red)}
+  .legend{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    padding:2px 4px 8px;font-size:10px;color:var(--muted);font-weight:600}
+  .legend b{font-weight:700;color:var(--ink)}
+  .lg{display:inline-flex;align-items:center;gap:5px}
+  .sw{width:20px;height:8px;border-radius:2px;display:inline-block}
+  .grad{background:linear-gradient(90deg,#FBEAEA,#FDF1E3,#F7DDD3,var(--coral))}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--red);display:inline-block}
+  .empty{padding:22px;text-align:center;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="legend" id="legend"></div>
+  <div id="gridwrap"></div>
+</div>
+<script>
+(function(){
+  "use strict";
+
+  // ---- synthetic fallback: 6 Veho regional hubs x 4 shift windows, mirrors
+  // the bound contract exactly so the plugin reads correctly unbound
+  // (editor panel, config handshake, headless PNG export).
+  function synth(){
+    var hubs = ["Northeast Hub","Southeast Hub","Midwest Hub","Texas Hub","West Coast Hub","Mountain Hub"];
+    var shifts = ["Morning","Midday","Afternoon","Evening"];
+    var basePkgs = [1450,1180,980,860,1320,520];
+    var baseOnTime = [0.942,0.918,0.931,0.905,0.926,0.889];
+    var baseRisk = [0.028,0.041,0.033,0.048,0.036,0.055];
+    var rows = [];
+    for (var h=0;h<hubs.length;h++){
+      for (var s=0;s<shifts.length;s++){
+        var seed = (hubs[h].length*7 + s*13 + h*3) % 23;
+        var tilt = (seed - 11) / 100;
+        var load = 0.88;
+        if ((h===0||h===1||h===4) && s===0) load = 1.30;
+        if ((h===2||h===3||h===5) && s===3) load = 1.25;
+        if (s===1) load = 1.10;
+        var inlandEvening = (h===2||h===3||h===5) && s===3;
+        rows.push({
+          hub: hubs[h],
+          shift: shifts[s],
+          packages: Math.max(120, Math.round(basePkgs[h]*load*(1+tilt*0.6))),
+          ontime: Math.max(0.75, Math.min(0.99, baseOnTime[h] + (inlandEvening?-0.04:0) + tilt*0.05)),
+          risk: Math.max(0.01, Math.min(0.22, baseRisk[h] + (inlandEvening?0.03:0) + tilt*0.04))
+        });
+      }
+    }
+    return rows;
+  }
+
+  function esc(s){
+    return String(s == null ? "" : s)
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+      .replace(/"/g,"&quot;");
+  }
+
+  // Diverging red -> amber -> coral scale on On-Time %, 0.75..0.99 mapped to 0..1.
+  function scoreColor(s){
+    if (s == null || !isFinite(s)) return "#F7F5F3";
+    var x = Math.max(0, Math.min(1, (s - 0.75) / 0.24));
+    var stops = [
+      {p:0.0,  c:[253,236,236]},
+      {p:0.45, c:[253,241,227]},
+      {p:0.7,  c:[247,221,211]},
+      {p:1.0,  c:[232,73,49]}
+    ];
+    for (var i=0;i<stops.length-1;i++){
+      var a = stops[i], b = stops[i+1];
+      if (x >= a.p && x <= b.p){
+        var t = (b.p===a.p) ? 0 : (x-a.p)/(b.p-a.p);
+        var r = Math.round(a.c[0]+(b.c[0]-a.c[0])*t);
+        var g = Math.round(a.c[1]+(b.c[1]-a.c[1])*t);
+        var bl = Math.round(a.c[2]+(b.c[2]-a.c[2])*t);
+        return "rgb("+r+","+g+","+bl+")";
+      }
+    }
+    return "rgb(232,73,49)";
+  }
+
+  function textOn(s){
+    return (s != null && s >= 0.75 + 0.7*0.24) ? "#FFFFFF" : "#1B1F27";
+  }
+
+  function render(rows){
+    var wrap = document.getElementById("gridwrap");
+    var legend = document.getElementById("legend");
+
+    if (!rows || !rows.length){
+      wrap.innerHTML = '<div class="empty">No delivery performance rows to display.</div>';
+      legend.innerHTML = "";
+      return;
+    }
+
+    var hubs = [], shifts = [];
+    var byKey = {};
+    rows.forEach(function(r){
+      if (hubs.indexOf(r.hub) === -1) hubs.push(r.hub);
+      if (shifts.indexOf(r.shift) === -1) shifts.push(r.shift);
+      byKey[r.hub + "||" + r.shift] = r;
+    });
+
+    // Rank hubs by total packages, highest first, so the busiest hubs sit
+    // at the top of the grid.
+    var totals = {};
+    hubs.forEach(function(h){ totals[h] = 0; });
+    rows.forEach(function(r){ totals[r.hub] += (r.packages||0); });
+    hubs.sort(function(a,b){ return totals[b]-totals[a]; });
+
+    legend.innerHTML =
+      '<span class="lg"><b>On-Time %</b> <span class="sw grad"></span> low &rarr; high</span>' +
+      '<span class="lg"><span class="dot"></span> Exception rate &gt; 5%</span>' +
+      '<span class="lg" style="margin-left:auto">Packages shown per cell</span>';
+
+    var html = '<table class="grid"><colgroup><col style="width:132px">';
+    shifts.forEach(function(){ html += '<col>'; });
+    html += '</colgroup><thead><tr><th class="corner"></th>';
+    shifts.forEach(function(s){ html += '<th>'+esc(s)+'</th>'; });
+    html += '</tr></thead><tbody>';
+
+    hubs.forEach(function(h){
+      html += '<tr><td class="rowhead" title="'+esc(h)+'">'+esc(h)+'</td>';
+      shifts.forEach(function(s){
+        var d = byKey[h+"||"+s];
+        if (!d){
+          html += '<td class="cell"></td>';
+        } else {
+          var bg = scoreColor(d.ontime);
+          var fg = textOn(d.ontime);
+          var flag = (d.risk != null && d.risk > 0.05)
+            ? '<span class="flag" title="Exception rate '+(d.risk*100).toFixed(1)+'%"></span>' : '';
+          html += '<td class="cell" style="background:'+bg+'" ' +
+            'title="'+esc(h)+' × '+esc(s)+': On-Time '+(d.ontime!=null?(d.ontime*100).toFixed(1)+'%':'—')+
+            ', '+(d.packages!=null?d.packages.toLocaleString():'—')+' packages, exception rate '+
+            (d.risk!=null?(d.risk*100).toFixed(1)+'%':'—')+'">' + flag +
+            '<div class="wrap">' +
+              '<div class="score" style="color:'+fg+'">' + (d.ontime!=null?(d.ontime*100).toFixed(1)+'%':'—') + '</div>' +
+              '<div class="vol" style="color:'+fg+';opacity:.85">' + (d.packages!=null?d.packages.toLocaleString():'—') + ' pkgs</div>' +
+            '</div>' +
+          '</td>';
+        }
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+  }
+
+  var current = synth();
+
+  var redraw = function(){ render(current); };
+  if (window.ResizeObserver){
+    new ResizeObserver(redraw).observe(document.getElementById("stage"));
+  }
+  window.addEventListener("resize", redraw);
+  window.addEventListener("load", function(){ requestAnimationFrame(redraw); });
+  requestAnimationFrame(redraw);
+
+  // ---------------- Sigma wiring ----------------
+  var client = (window.sigmaComputing && window.sigmaComputing.plugin)
+    ? window.sigmaComputing.plugin.client : null;
+
+  if (!client){ render(current); return; }
+
+  client.config.configureEditorPanel([
+    {name:"source",  type:"element"},
+    {name:"hub",     type:"column", source:"source", allowedTypes:["text"],   label:"Hub"},
+    {name:"shift",   type:"column", source:"source", allowedTypes:["text"],   label:"Shift window"},
+    {name:"packages",type:"column", source:"source", allowedTypes:["number"], label:"Packages"},
+    {name:"ontime",  type:"column", source:"source", allowedTypes:["number"], label:"On-time % (0-1 or 0-100)"},
+    {name:"risk",    type:"column", source:"source", allowedTypes:["number"], label:"Exception rate (0-1 or 0-100)"}
+  ]);
+
+  function col(data, cfg, key){
+    var id = cfg[key];
+    return (id && data && data[id]) ? data[id] : null;
+  }
+
+  function toRows(data, cfg){
+    var h = col(data, cfg, "hub");
+    if (!h || !h.length) return null;
+    var s = col(data, cfg, "shift"), v = col(data, cfg, "packages"),
+        o = col(data, cfg, "ontime"), r = col(data, cfg, "risk");
+    var out = [];
+    for (var i=0;i<h.length;i++){
+      var ov = o ? Number(o[i]) : null;
+      if (ov != null && ov > 1.5) ov = ov/100;
+      var rv = r ? Number(r[i]) : null;
+      if (rv != null && rv > 1.5) rv = rv/100;
+      out.push({
+        hub: h[i],
+        shift: s ? s[i] : "",
+        packages: v ? Number(v[i]) : null,
+        ontime: (ov != null && isFinite(ov)) ? ov : null,
+        risk: (rv != null && isFinite(rv)) ? rv : null
+      });
+    }
+    return out;
+  }
+
+  var unsub = null;
+  client.config.subscribe(function(cfg){
+    if (unsub){ try{ unsub(); }catch(e){} unsub = null; }
+    if (!cfg || !cfg.source){ current = synth(); render(current); return; }
+    unsub = client.elements.subscribeToElementData(cfg.source, function(data){
+      var rows = toRows(data, cfg);
+      current = (rows && rows.length) ? rows : synth();
+      render(current);
+    });
+  });
+
+  render(current);
+})();
+</script>
+</body>
+</html>

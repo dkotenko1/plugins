@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin:0; padding:0; height:100%; overflow:hidden;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  #stage { width:100%; height:100%; box-sizing:border-box; padding:10px 12px; display:flex;
+    flex-direction:column; gap:8px; }
+  .grid { flex:1; display:grid; grid-auto-flow:column; gap:8px; min-height:0; }
+  .card { border-radius:10px; padding:10px 12px; display:flex; flex-direction:column;
+    justify-content:space-between; color:#fff; position:relative; overflow:hidden; min-width:0;
+    border-top:3px solid #1C1C1C; }
+  .card .tier { font-size:12px; font-weight:700; letter-spacing:.02em; opacity:.92;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .card .rev { font-size:20px; font-weight:700; margin-top:2px; }
+  .card .members { font-size:11px; opacity:.8; margin-top:1px; }
+  .card .bar-track { height:5px; border-radius:3px; background:rgba(255,255,255,.28); margin-top:8px; }
+  .card .bar-fill { height:5px; border-radius:3px; background:#fff; }
+  .card .goal { font-size:10px; opacity:.8; margin-top:3px; }
+  .legend { display:flex; align-items:center; gap:6px; font-size:10px; color:#6b6270; padding:0 2px; }
+  .legend .sw { width:9px; height:9px; border-radius:2px; display:inline-block; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="grid" id="grid"></div>
+  <div class="legend">
+    <span class="sw" style="background:#C25A88"></span> Below plan
+    <span class="sw" style="background:#C2178A"></span> On plan
+    <span class="sw" style="background:#7A1856"></span> Ahead of plan
+  </div>
+</div>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<script>
+var stage = document.getElementById('stage');
+var grid = document.getElementById('grid');
+var unsub = null;
+var ro = new ResizeObserver(function(){ render(lastRows || synth()); });
+ro.observe(stage);
+
+// Guard the Sigma host bridge -- if the unpkg plugin script fails to init
+// for any reason, window.sigmaComputing.plugin is undefined and an
+// unguarded lookup throws, aborting the whole script (including the
+// fallback render() call at the bottom) and leaving the tile blank except
+// for static markup like the legend. Same pattern as the working
+// veho-delivery-ontime-grid plugin: fall back to synthetic data instead of
+// crashing.
+var client = (window.sigmaComputing && window.sigmaComputing.plugin)
+  ? window.sigmaComputing.plugin.client : null;
+
+if (client) {
+  client.config.configureEditorPanel([
+    { name: 'source', type: 'element' },
+    { name: 'tier', type: 'column', source: 'source', allowedTypes: ['text'], label: 'Product / Tier' },
+    { name: 'revenue', type: 'column', source: 'source', allowedTypes: ['number'], label: 'Revenue ($M)' },
+    { name: 'members', type: 'column', source: 'source', allowedTypes: ['number'], label: 'Members (K)' },
+    { name: 'goal', type: 'column', source: 'source', allowedTypes: ['number'], label: 'Plan Attainment (%)' }
+  ]);
+}
+
+function colorFor(goal){
+  if (goal == null) return '#9CA3AF';
+  if (goal < 0.95) return '#C25A88';
+  if (goal <= 1.03) return '#C2178A';
+  return '#7A1856';
+}
+
+function fmtM(v){
+  if (v == null) return '--';
+  if (Math.abs(v) >= 1000) return '$' + (v/1000).toFixed(1) + 'B';
+  return '$' + v.toFixed(1) + 'M';
+}
+
+var lastRows = null;
+
+function synth(){
+  return [
+    { tier: 'IPSY Glam Bag', revenue: 172, members: 1450, goal: 1.04 },
+    { tier: 'Glam Bag Plus', revenue: 138, members: 410, goal: 0.91 },
+    { tier: 'Glam Bag X', revenue: 64, members: 96, goal: 1.12 },
+    { tier: 'BoxyCharm', revenue: 118, members: 340, goal: 0.98 },
+    { tier: 'IPSY Shopper', revenue: 41, members: 610, goal: 1.06 },
+    { tier: 'BrandLab Insights', revenue: 22, members: 38, goal: 1.21 }
+  ];
+}
+
+function render(rows){
+  lastRows = rows;
+  grid.innerHTML = '';
+  var w = stage.clientWidth, h = stage.clientHeight;
+  var cols = Math.max(1, Math.min(rows.length, Math.round(w / 150)));
+  grid.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+  grid.style.gridTemplateRows = 'repeat(' + Math.ceil(rows.length / cols) + ', 1fr)';
+  grid.style.gridAutoFlow = 'row';
+  rows.forEach(function(r){
+    var pct = r.goal == null ? 50 : Math.max(4, Math.min(100, r.goal * 100));
+    var card = document.createElement('div');
+    card.className = 'card';
+    card.style.background = colorFor(r.goal);
+    card.innerHTML =
+      '<div class="tier">' + r.tier + '</div>' +
+      '<div><div class="rev">' + fmtM(r.revenue) + '</div>' +
+      '<div class="members">' + (r.members != null ? r.members.toFixed(0) + 'K members' : '') + '</div></div>' +
+      '<div><div class="bar-track"><div class="bar-fill" style="width:' + pct + '%"></div></div>' +
+      '<div class="goal">' + (r.goal != null ? (r.goal*100).toFixed(0) + '% of plan' : '') + '</div></div>';
+    grid.appendChild(card);
+  });
+}
+
+if (client) {
+  client.config.subscribe(function(cfg){
+    if (unsub) { unsub(); unsub = null; }
+    if (cfg && cfg.source && cfg.tier) {
+      unsub = client.elements.subscribeToElementData(cfg.source, function(data){
+        var tierCol = data[cfg.tier] || [];
+        var revCol = cfg.revenue ? (data[cfg.revenue] || []) : [];
+        var memCol = cfg.members ? (data[cfg.members] || []) : [];
+        var goalCol = cfg.goal ? (data[cfg.goal] || []) : [];
+        var rows = tierCol.map(function(t, i){
+          return { tier: t, revenue: revCol[i], members: memCol[i], goal: goalCol[i] };
+        });
+        render(rows.length ? rows : synth());
+      });
+    } else {
+      render(synth());
+    }
+  });
+} else {
+  render(synth());
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>HCP Engagement Funnel — POCN Sigma Plugin</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,Arial,sans-serif;background:transparent;color:#0A2540;overflow:hidden}
+  #wrap{height:100%;width:100%;display:flex;flex-direction:column;padding:14px 18px;gap:8px}
+  #top{display:flex;justify-content:space-between;align-items:baseline;flex:0 0 auto}
+  #ttl{font-size:13px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#0A2540}
+  #meta{font-size:11px;color:#6B7A8D}
+  #meta b{color:#1E6FA8;font-size:13px}
+  #funnel{flex:1 1 auto;display:flex;flex-direction:column;gap:4px;min-height:0;padding-top:2px}
+  .row{position:relative;flex:1 1 0;display:flex;align-items:center;justify-content:center;min-height:0}
+  .seg{height:88%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;border-radius:8px;box-shadow:0 2px 6px rgba(10,37,64,.16);transition:transform .1s;position:relative}
+  .seg:hover{transform:translateY(-1px)}
+  .seg .st{font-size:12px;font-weight:700;letter-spacing:.02em;opacity:.95}
+  .seg .ct{font-size:20px;font-weight:800;line-height:1.05}
+  .seg .pc{font-size:10.5px;opacity:.9;font-weight:600}
+  .conv{position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:10.5px;font-weight:700;color:#0A2540;background:rgba(255,255,255,.82);border:1px solid #D6E4F0;border-radius:20px;padding:2px 8px;white-space:nowrap}
+  .drop{position:absolute;left:50%;transform:translateX(-50%);z-index:4;font-size:9.5px;font-weight:700;color:#B23A48;background:#FFF;border:1px solid #F0D2D6;border-radius:20px;padding:1px 7px;bottom:-9px;white-space:nowrap}
+  #tip{position:fixed;pointer-events:none;background:#0A2540;color:#EAF3FB;border-radius:8px;padding:8px 11px;font-size:11px;opacity:0;transition:opacity .1s;z-index:10;white-space:nowrap;box-shadow:0 8px 22px rgba(0,0,0,.35)}
+  #tip b{color:#57C3F3}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="top">
+    <div id="ttl">HCP Engagement Funnel</div>
+    <div id="meta"><span id="brand">All brands</span> · top-to-lift conversion <b id="e2e">—</b></div>
+  </div>
+  <div id="funnel"></div>
+</div>
+<div id="tip"></div>
+<script>
+(function(){
+  var client=(window.sigmaComputing&&window.sigmaComputing.plugin&&window.sigmaComputing.plugin.client)||null;
+  var defs=[
+    {name:'source',type:'element'},
+    {name:'stage',type:'column',source:'source',label:'Stage (Targeted → Lift)'},
+    {name:'value',type:'column',source:'source',allowedTypes:['number','integer'],label:'HCP count'},
+    {name:'order',type:'column',source:'source',allowedTypes:['number','integer'],label:'Stage order (1..N)'},
+    {name:'brand',type:'column',source:'source',label:'Pharma brand (optional)'}
+  ];
+  if(client) client.config.configureEditorPanel(defs);
+
+  // POCN navy -> cyan ramp, one shade per stage depth
+  function shade(t){ // t 0..1  navy(#0A2540) -> cyan(#29ABE2)
+    var a=[10,37,64], b=[41,171,226];
+    var r=Math.round(a[0]+(b[0]-a[0])*t), g=Math.round(a[1]+(b[1]-a[1])*t), bl=Math.round(a[2]+(b[2]-a[2])*t);
+    return 'rgb('+r+','+g+','+bl+')';
+  }
+  function fmt(n){ if(n>=1e6) return (n/1e6).toFixed(1)+'M'; if(n>=1e3) return (n/1e3).toFixed(1)+'K'; return String(Math.round(n)); }
+  var tip=document.getElementById('tip');
+
+  function draw(stages){
+    var f=document.getElementById('funnel'); f.innerHTML='';
+    if(!stages.length){return;}
+    var top=stages[0].value||1;
+    var minW=34, maxW=100; // percent widths (funnel taper)
+    stages.forEach(function(s,i){
+      var frac=Math.max(0.02, s.value/top);
+      var w=minW+(maxW-minW)*frac;
+      var pctTop=(s.value/top*100);
+      var row=document.createElement('div'); row.className='row';
+      var seg=document.createElement('div'); seg.className='seg';
+      seg.style.width=w+'%';
+      seg.style.background='linear-gradient(90deg,'+shade(i/(stages.length-1||1))+','+shade(Math.min(1,(i+0.6)/(stages.length-1||1)))+')';
+      seg.innerHTML='<div class="st">'+s.stage+'</div><div class="ct">'+fmt(s.value)+'</div><div class="pc">'+pctTop.toFixed(0)+'% of targeted</div>';
+      // step conversion badge vs previous
+      if(i>0){
+        var conv=stages[i-1].value? (s.value/stages[i-1].value*100):0;
+        var b=document.createElement('div'); b.className='conv'; b.textContent=conv.toFixed(0)+'% step';
+        seg.appendChild(b);
+        var dropN=stages[i-1].value - s.value;
+        if(dropN>0){ var d=document.createElement('div'); d.className='drop'; d.textContent='▼ '+fmt(dropN)+' dropped'; row.appendChild(d); }
+      }
+      seg.addEventListener('mousemove',function(e){
+        tip.innerHTML='<b>'+s.stage+'</b><br>'+fmt(s.value)+' HCPs · '+pctTop.toFixed(1)+'% of targeted';
+        tip.style.opacity=1; tip.style.left=(e.clientX+12)+'px'; tip.style.top=(e.clientY+12)+'px';
+      });
+      seg.addEventListener('mouseleave',function(){tip.style.opacity=0;});
+      row.appendChild(seg); f.appendChild(row);
+    });
+    var e2e = stages.length? (stages[stages.length-1].value/ (stages[0].value||1) *100):0;
+    document.getElementById('e2e').textContent=e2e.toFixed(1)+'%';
+  }
+
+  function synth(){
+    var names=['Targeted','Reached','Engaged','Content Consumed','Prescriber Lift'];
+    var rate=[1,0.72,0.41,0.23,0.09], base=196000;
+    return names.map(function(n,i){return {stage:n,order:i+1,value:Math.round(base*rate[i])};});
+  }
+
+  function aggregate(data,cfg){
+    // returns [{stage, order, value}] sorted by order asc, aggregated across rows/brands
+    var stageCol=cfg.stage, valCol=cfg.value, ordCol=cfg.order, brandCol=cfg.brand;
+    if(!data||!stageCol||!data[stageCol]||!valCol||!data[valCol]) return null;
+    var stg=data[stageCol]||[], val=data[valCol]||[], ord=(ordCol&&data[ordCol])||[], br=(brandCol&&data[brandCol])||[];
+    var map={}; var brands={};
+    for(var i=0;i<stg.length;i++){
+      if(brandCol && st.brandFilter && String(br[i])!==st.brandFilter) continue;
+      var k=String(stg[i]);
+      if(!map[k]) map[k]={stage:k,order:(ord[i]!=null?Number(ord[i]):9999),value:0};
+      map[k].value+=Number(val[i])||0;
+      if(ord[i]!=null && Number(ord[i])<map[k].order) map[k].order=Number(ord[i]);
+      if(br[i]!=null) brands[String(br[i])]=1;
+    }
+    var arr=Object.keys(map).map(function(k){return map[k];});
+    arr.sort(function(a,b){return a.order-b.order;});
+    st.brandList=Object.keys(brands);
+    return arr.length?arr:null;
+  }
+
+  var st={cfg:{},data:null,unsub:null,brandFilter:null,brandList:[]};
+  function recompute(){
+    var agg=aggregate(st.data,st.cfg||{});
+    document.getElementById('brand').textContent = (st.brandList&&st.brandList.length>1)? ('All '+st.brandList.length+' brands') : 'All brands';
+    draw(agg||synth());
+  }
+  if(client){
+    client.config.subscribe(function(cfg){
+      st.cfg=cfg||{};
+      if(st.unsub){st.unsub();st.unsub=null;}
+      if(cfg&&cfg.source){st.unsub=client.elements.subscribeToElementData(cfg.source,function(d){st.data=d;recompute();});}
+      recompute();
+    });
+  } else { recompute(); }
+
+  // Sigma sizes the panel AFTER first paint -> redraw on resize so the funnel never renders at a stale size
+  var ro=new ResizeObserver(function(){recompute();});
+  ro.observe(document.getElementById('wrap'));
+})();
+</script>
+</body>
+</html>

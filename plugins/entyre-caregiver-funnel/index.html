@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin:0; padding:0; height:100%; overflow:hidden;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  #stage { width:100%; height:100%; box-sizing:border-box; padding:10px 12px; display:flex;
+    flex-direction:column; gap:6px; }
+  .grid { flex:1; display:grid; grid-auto-flow:column; gap:10px; min-height:0; }
+  .col { display:flex; flex-direction:column; min-width:0; }
+  .col .name { font-size:11px; font-weight:700; color:#17301E; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; margin-bottom:4px; }
+  .col .total { font-size:10px; color:#5B6B7F; margin-bottom:4px; }
+  .funnel { flex:1; display:flex; flex-direction:column; gap:2px; justify-content:flex-end; }
+  .stagebar { display:flex; align-items:center; }
+  .stagebar .track { flex:1; height:16px; background:#EEF2F7; border-radius:3px; overflow:hidden; }
+  .stagebar .fill { height:16px; border-radius:3px; }
+  .stagebar .label { font-size:9px; color:#5B6B7F; width:100%; text-align:center;
+    position:relative; top:-13px; pointer-events:none; }
+  .legend { display:flex; align-items:center; gap:10px; font-size:10px; color:#5B6B7F;
+    padding:0 2px; flex-wrap:wrap; }
+  .legend .sw { width:9px; height:9px; border-radius:2px; display:inline-block; margin-right:3px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="grid" id="grid"></div>
+  <div class="legend" id="legend">
+    <span><span class="sw" style="background:#C9D8CC"></span>Applied — Pending</span>
+    <span><span class="sw" style="background:#8FB595"></span>Eligibility Verified</span>
+    <span><span class="sw" style="background:#4F815C"></span>E-Signature Complete</span>
+    <span><span class="sw" style="background:#17301E"></span>Active &amp; Compensated</span>
+  </div>
+</div>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<script>
+var stageEl = document.getElementById('stage');
+var grid = document.getElementById('grid');
+var unsub = null;
+var lastRows = null;
+
+// ResizeObserver on the stage element (not a window resize listener) so the
+// funnel re-lays-out when the tile is resized in the workbook.
+var ro = new ResizeObserver(function(){ render(lastRows || synth()); });
+ro.observe(stageEl);
+
+// Guard the Sigma host bridge. An unguarded window.sigmaComputing.plugin.client
+// lookup throws whenever the unpkg bridge script fails to initialize, which
+// aborts the ENTIRE script -- including the synth() fallback below -- leaving
+// the tile blank except for the static legend markup. Confirmed pattern from
+// veho-delivery-ontime-grid / ipsy-audience-cohort-grid.
+var client = (window.sigmaComputing && window.sigmaComputing.plugin)
+  ? window.sigmaComputing.plugin.client : null;
+
+var STAGE_COLOR = {
+  'Applied — Pending': '#C9D8CC',
+  'Eligibility Verified': '#8FB595',
+  'E-Signature Complete': '#4F815C',
+  'Active & Compensated': '#17301E'
+};
+var STAGE_ORDER = ['Applied — Pending', 'Eligibility Verified',
+                   'E-Signature Complete', 'Active & Compensated'];
+
+if (client) {
+  client.config.configureEditorPanel([
+    { name: 'source', type: 'element' },
+    { name: 'program', type: 'column', source: 'source', allowedTypes: ['text'], label: 'State Program' },
+    { name: 'stage', type: 'column', source: 'source', allowedTypes: ['text'], label: 'Enrollment Stage' },
+    { name: 'stageOrder', type: 'column', source: 'source', allowedTypes: ['number'], label: 'Stage Order' },
+    { name: 'caregivers', type: 'column', source: 'source', allowedTypes: ['number'], label: 'Caregivers' },
+    { name: 'pct', type: 'column', source: 'source', allowedTypes: ['number'], label: 'Pct of Program' }
+  ]);
+}
+
+function synth(){
+  // Representative of the real 8-state footprint and funnel shares.
+  var programs = [
+    ['MassHealth PCA/Adult Foster Care', 2660],
+    ['Ohio PASSPORT', 1710],
+    ['Virginia CCC Plus', 1330],
+    ['Illinois Community Care Program', 1140],
+    ['Michigan MI Choice Waiver', 950],
+    ['Wisconsin Family Care/IRIS', 760],
+    ['Maine Consumer-Directed Attendant Services', 570],
+    ['New Hampshire Choices for Independence', 380]
+  ];
+  var shares = [
+    ['Applied — Pending', .04], ['Eligibility Verified', .06],
+    ['E-Signature Complete', .08], ['Active & Compensated', .82]
+  ];
+  var rows = [];
+  programs.forEach(function(p){
+    shares.forEach(function(s, i){
+      rows.push({ program: p[0], stage: s[0], stageOrder: i + 1,
+                  caregivers: Math.round(p[1] * s[1]), pct: Math.round(s[1] * 1000) / 10 });
+    });
+  });
+  return rows;
+}
+
+function shortName(n){
+  // First meaningful word/state cue so an 8-column layout stays legible.
+  var map = {
+    'MassHealth PCA/Adult Foster Care': 'Massachusetts',
+    'Ohio PASSPORT': 'Ohio',
+    'Virginia CCC Plus': 'Virginia',
+    'Illinois Community Care Program': 'Illinois',
+    'Michigan MI Choice Waiver': 'Michigan',
+    'Wisconsin Family Care/IRIS': 'Wisconsin',
+    'Maine Consumer-Directed Attendant Services': 'Maine',
+    'New Hampshire Choices for Independence': 'New Hampshire'
+  };
+  return map[n] || n;
+}
+
+function render(rows){
+  lastRows = rows;
+  grid.innerHTML = '';
+  if (!rows || !rows.length) return;
+
+  var byProgram = {};
+  var order = [];
+  rows.forEach(function(r){
+    if (!byProgram[r.program]) { byProgram[r.program] = []; order.push(r.program); }
+    byProgram[r.program].push(r);
+  });
+
+  var w = stageEl.clientWidth;
+  var cols = Math.max(1, Math.min(order.length, Math.round(w / 110)));
+  grid.style.gridTemplateColumns = 'repeat(' + Math.min(cols, order.length) + ', 1fr)';
+  grid.style.gridAutoFlow = 'column';
+  grid.style.gridTemplateRows = 'repeat(' + Math.ceil(order.length / Math.min(cols, order.length)) + ', 1fr)';
+
+  order.forEach(function(name){
+    var stages = byProgram[name].slice().sort(function(a, b){ return a.stageOrder - b.stageOrder; });
+    var total = 0;
+    stages.forEach(function(s){ if (s.stage === 'Active & Compensated') total += s.caregivers || 0; });
+
+    var col = document.createElement('div');
+    col.className = 'col';
+    col.innerHTML = '<div class="name">' + shortName(name) + '</div>' +
+      '<div class="total">' + (total || '--') + ' active</div>';
+
+    var funnel = document.createElement('div');
+    funnel.className = 'funnel';
+    stages.forEach(function(s){
+      var pct = Math.max(4, Math.min(100, s.pct != null ? s.pct : 0));
+      var row = document.createElement('div');
+      row.className = 'stagebar';
+      row.title = s.stage + ': ' + s.caregivers + ' caregivers (' + s.pct + '%)';
+      row.innerHTML = '<div class="track"><div class="fill" style="width:' + pct + '%;background:' +
+        (STAGE_COLOR[s.stage] || '#9CA3AF') + '"></div></div>';
+      funnel.appendChild(row);
+    });
+    col.appendChild(funnel);
+    grid.appendChild(col);
+  });
+}
+
+if (client) {
+  client.config.subscribe(function(cfg){
+    if (unsub) { unsub(); unsub = null; }
+    if (cfg && cfg.source && cfg.program && cfg.stage) {
+      unsub = client.elements.subscribeToElementData(cfg.source, function(data){
+        var progCol = data[cfg.program] || [];
+        var stageCol = data[cfg.stage] || [];
+        var orderCol = cfg.stageOrder ? (data[cfg.stageOrder] || []) : [];
+        var caregiversCol = cfg.caregivers ? (data[cfg.caregivers] || []) : [];
+        var pctCol = cfg.pct ? (data[cfg.pct] || []) : [];
+        var rows = progCol.map(function(p, i){
+          return { program: p, stage: stageCol[i], stageOrder: orderCol[i],
+                   caregivers: caregiversCol[i], pct: pctCol[i] };
+        });
+        render(rows.length ? rows : synth());
+      });
+    } else {
+      render(synth());
+    }
+  });
+} else {
+  render(synth());
+}
+</script>
+</body>
+</html>

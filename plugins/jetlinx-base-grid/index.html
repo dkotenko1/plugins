@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Base Network Utilization Grid</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:transparent;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:#112337;-webkit-font-smoothing:antialiased}
+  #stage{position:relative;width:100%;height:100%;overflow:hidden}
+  #grid{position:absolute;inset:0;display:grid;gap:6px;padding:6px;box-sizing:border-box;
+    grid-auto-rows:1fr;overflow:hidden}
+  .card{position:relative;border-radius:8px;padding:8px 10px;display:flex;
+    flex-direction:column;justify-content:space-between;overflow:hidden;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.14);cursor:default;
+    transition:transform .1s ease}
+  .card:hover{transform:translateY(-1px)}
+  .base{font-size:11px;font-weight:700;color:#fff;line-height:1.2;
+    text-shadow:0 1px 2px rgba(0,0,0,.25)}
+  .state{font-size:9px;font-weight:600;color:rgba(255,255,255,.78);
+    letter-spacing:.06em;text-transform:uppercase}
+  .row{display:flex;justify-content:space-between;align-items:baseline;margin-top:6px}
+  .metric{font-size:15px;font-weight:800;color:#fff}
+  .metriclbl{font-size:8px;font-weight:600;color:rgba(255,255,255,.7);
+    letter-spacing:.05em;text-transform:uppercase}
+  .util{font-size:20px;font-weight:800;color:#fff;text-align:right}
+  .utillbl{font-size:8px;font-weight:700;color:rgba(255,255,255,.78);
+    letter-spacing:.06em;text-transform:uppercase;text-align:right}
+  #tip{position:absolute;pointer-events:none;opacity:0;transition:opacity .1s ease;
+    background:#081420;color:#fff;border-radius:6px;padding:7px 9px;font-size:10.5px;
+    line-height:1.5;box-shadow:0 6px 18px rgba(8,20,32,.4);max-width:220px;z-index:5}
+  #tip b{font-weight:700}
+  #tip .k{color:#8FB4FF;font-weight:600}
+  #legend{position:absolute;left:10px;bottom:6px;display:flex;align-items:center;
+    gap:6px;font-size:9px;font-weight:600;color:#5B6B7F;letter-spacing:.05em;z-index:3}
+  #legend .bar{width:88px;height:6px;border-radius:4px;
+    background:linear-gradient(90deg,#204CE5 0%,#E1A32D 55%,#D6365A 100%)}
+  #empty{position:absolute;inset:0;display:none;align-items:center;
+    justify-content:center;font-size:11px;color:#5B6B7F}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="grid"></div>
+  <div id="legend"><span>LOW</span><span class="bar"></span><span>AT CAPACITY</span></div>
+  <div id="tip"></div>
+  <div id="empty">No base network data to display</div>
+</div>
+<script>
+(function () {
+  var stage = document.getElementById("stage");
+  var grid  = document.getElementById("grid");
+  var tip   = document.getElementById("tip");
+  var emptyEl = document.getElementById("empty");
+  var rows = null;
+
+  // --- utilization colour scale: brand blue (cool/low) -> amber -> red (hot/at capacity)
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function mix(c1, c2, t) {
+    return "rgb(" + Math.round(lerp(c1[0], c2[0], t)) + "," +
+                    Math.round(lerp(c1[1], c2[1], t)) + "," +
+                    Math.round(lerp(c1[2], c2[2], t)) + ")";
+  }
+  var COOL = [32, 76, 229], MIDC = [225, 163, 45], HOT = [214, 54, 90];
+  function utilColor(pct) {
+    var t = Math.max(0, Math.min(1, (pct - 55) / 40));   // 55%..95% span
+    return t < 0.5 ? mix(COOL, MIDC, t / 0.5) : mix(MIDC, HOT, (t - 0.5) / 0.5);
+  }
+
+  function clip(t, n) { return t.length <= n ? t : t.slice(0, n - 1) + "…"; }
+
+  // --- fallback so the plugin looks right before it is bound to data
+  function synth() {
+    var bases = [
+      ["Omaha (HQ)", "NE", 14, 620, 88], ["Dallas", "TX", 11, 540, 93],
+      ["Scottsdale", "AZ", 8, 470, 90], ["Nashville", "TN", 7, 380, 92],
+      ["Denver", "CO", 9, 430, 86], ["Salt Lake City", "UT", 6, 320, 78],
+      ["Houston", "TX", 8, 410, 84], ["Kansas City", "MO", 5, 280, 74],
+      ["Tulsa", "OK", 5, 260, 72], ["Las Vegas", "NV", 4, 210, 81],
+      ["Columbus", "OH", 5, 250, 75], ["Wichita", "KS", 3, 150, 62]
+    ];
+    return bases.map(function (b) {
+      return { base: b[0], state: b[1], aircraft: b[2], members: b[3], util: b[4] };
+    });
+  }
+
+  function fmtK(v) {
+    return v >= 1000 ? (v / 1000).toFixed(1) + "K" : String(Math.round(v));
+  }
+
+  function draw() {
+    var data = rows && rows.length ? rows : synth();
+    emptyEl.style.display = (data && data.length) ? "none" : "flex";
+    grid.innerHTML = "";
+    if (!data || !data.length) return;
+
+    var n = data.length;
+    var cols = Math.max(2, Math.min(6, Math.ceil(Math.sqrt(n * 1.5))));
+    var rowsN = Math.ceil(n / cols);
+    grid.style.gridTemplateColumns = "repeat(" + cols + ", 1fr)";
+    grid.style.gridTemplateRows = "repeat(" + rowsN + ", 1fr)";
+
+    var sorted = data.slice().sort(function (a, b) { return b.util - a.util; });
+
+    sorted.forEach(function (d) {
+      var col = utilColor(d.util);
+      var card = document.createElement("div");
+      card.className = "card";
+      card.style.background =
+        "linear-gradient(135deg," + col + " 0%, rgba(8,20,32,.72) 100%)";
+      card.innerHTML =
+        '<div><div class="base">' + clip(d.base, 22) + '</div>' +
+        '<div class="state">' + d.state + '</div></div>' +
+        '<div class="row">' +
+          '<div><div class="metric">' + d.aircraft + '</div>' +
+          '<div class="metriclbl">Aircraft</div></div>' +
+          '<div><div class="metric">' + fmtK(d.members) + '</div>' +
+          '<div class="metriclbl">Members</div></div>' +
+          '<div><div class="util">' + Math.round(d.util) + '%</div>' +
+          '<div class="utillbl">Utilized</div></div>' +
+        '</div>';
+      card.addEventListener("mouseenter", function (ev) {
+        tip.innerHTML = "<b>" + d.base + ", " + d.state + "</b><br/>" +
+          '<span class="k">Aircraft</span> ' + d.aircraft + "<br/>" +
+          '<span class="k">Members served</span> ' + fmtK(d.members) + "<br/>" +
+          '<span class="k">Peak-day utilization</span> ' + Math.round(d.util) + "%";
+        tip.style.opacity = 1;
+        move(ev);
+      });
+      card.addEventListener("mousemove", move);
+      card.addEventListener("mouseleave", function () { tip.style.opacity = 0; });
+      function move(ev) {
+        var r = stage.getBoundingClientRect();
+        var x = ev.clientX - r.left + 12, y = ev.clientY - r.top + 12;
+        if (x + 220 > r.width) x = ev.clientX - r.left - 220;
+        if (y + 90 > r.height) y = ev.clientY - r.top - 90;
+        tip.style.left = Math.max(2, x) + "px";
+        tip.style.top = Math.max(2, y) + "px";
+      }
+      grid.appendChild(card);
+    });
+  }
+
+  // --- Sigma wiring -- guarded per HANDOFF sec.9: an unguarded lookup can
+  // throw a top-level exception that aborts the whole script (including the
+  // synth() fallback below it), blanking the tile.
+  var client = (window.sigmaComputing && window.sigmaComputing.plugin)
+    ? window.sigmaComputing.plugin.client : null;
+
+  if (client) {
+    client.config.configureEditorPanel([
+      { name: "source", type: "element" },
+      { name: "base", type: "column", source: "source",
+        allowedTypes: ["text"], label: "Base" },
+      { name: "state", type: "column", source: "source",
+        allowedTypes: ["text"], label: "State" },
+      { name: "aircraft", type: "column", source: "source",
+        allowedTypes: ["number"], label: "Aircraft" },
+      { name: "members", type: "column", source: "source",
+        allowedTypes: ["number"], label: "Members" },
+      { name: "utilization", type: "column", source: "source",
+        allowedTypes: ["number"], label: "Utilization %" }
+    ]);
+
+    var unsub = null;
+    client.config.subscribe(function (cfg) {
+      if (unsub) { unsub(); unsub = null; }
+      if (!cfg || !cfg.source) { rows = null; draw(); return; }
+      unsub = client.elements.subscribeToElementData(cfg.source, function (d) {
+        try {
+          var g = function (k) { return cfg[k] ? (d[cfg[k]] || []) : []; };
+          var b = g("base"), s = g("state"), a = g("aircraft"),
+              m = g("members"), u = g("utilization");
+          var n = Math.min(b.length, s.length, a.length, m.length, u.length);
+          var out = [];
+          for (var i = 0; i < n; i++) {
+            out.push({
+              base: String(b[i]), state: String(s[i]),
+              aircraft: Number(a[i]) || 0, members: Number(m[i]) || 0,
+              util: isFinite(Number(u[i])) ? Number(u[i]) : 0
+            });
+          }
+          rows = out;
+        } catch (e) { rows = null; }
+        draw();
+      });
+    });
+  } else {
+    draw();
+  }
+
+  // ResizeObserver on the stage element, not a window resize listener.
+  if (window.ResizeObserver) new ResizeObserver(draw).observe(stage);
+  draw();   // single paint; no animation loop, so headless PNG export can idle
+})();
+</script>
+</body>
+</html>

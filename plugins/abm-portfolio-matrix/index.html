@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Account Portfolio Prioritization — ABM Industries Sigma Plugin</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,Arial,sans-serif;background:transparent;color:#E8EDFB;overflow:hidden}
+  #wrap{height:100%;width:100%;display:flex;flex-direction:column;padding:12px 14px;gap:8px}
+  #top{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px}
+  #ttl{font-size:13px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#9DB8FF}
+  #meta{font-size:11px;color:#8FA0C8}
+  #meta b{color:#fff;font-size:13px}
+  #legend{display:flex;gap:12px;font-size:10px;color:#B7C4E6;flex-wrap:wrap}
+  .lg{display:flex;align-items:center;gap:5px}
+  .sw{width:10px;height:10px;border-radius:3px}
+  #stage{flex:1;position:relative;min-height:0}
+  svg{width:100%;height:100%;display:block}
+  #tip{position:fixed;pointer-events:none;background:#050E2E;border:1px solid #24346B;border-radius:8px;padding:8px 10px;font-size:11px;color:#E8EDFB;opacity:0;transition:opacity .1s;z-index:10;white-space:nowrap;box-shadow:0 8px 24px rgba(0,0,0,.55)}
+  #tip b{color:#9DB8FF}
+  #tip .q{font-weight:700}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="top">
+    <div><div id="ttl">Account Portfolio Prioritization</div><div id="meta"><b id="cnt">0</b> accounts · <b id="rev">—</b> revenue · avg margin <b id="mar">—</b></div></div>
+    <div id="legend">
+      <span class="lg"><span class="sw" style="background:#17B26A"></span>Grow &amp; invest</span>
+      <span class="lg"><span class="sw" style="background:#FF8200"></span>Optimize margin</span>
+      <span class="lg"><span class="sw" style="background:#3B82F6"></span>Protect &amp; expand</span>
+      <span class="lg"><span class="sw" style="background:#64748B"></span>Watch / rationalize</span>
+    </div>
+  </div>
+  <div id="stage"></div>
+</div>
+<div id="tip"></div>
+<script>
+(function(){
+  var client=(window.sigmaComputing&&window.sigmaComputing.plugin&&window.sigmaComputing.plugin.client)||null;
+  var defs=[
+    {name:'source',type:'element'},
+    {name:'label',type:'column',source:'source',label:'Account / segment name'},
+    {name:'x',type:'column',source:'source',allowedTypes:['number','integer'],label:'Gross margin % (x-axis)'},
+    {name:'y',type:'column',source:'source',allowedTypes:['number','integer'],label:'Contract revenue (y-axis)'},
+    {name:'size',type:'column',source:'source',allowedTypes:['number','integer'],label:'Labor hours (bubble size)'},
+    {name:'group',type:'column',source:'source',label:'Segment (grouping, optional)'},
+    {name:'xMid',type:'text',label:'Margin target line (%)',defaultValue:'12'}
+  ];
+  if(client) client.config.configureEditorPanel(defs);
+
+  var Q={grow:'#17B26A',opt:'#FF8200',prot:'#3B82F6',watch:'#64748B'};
+  var tip=document.getElementById('tip');
+  var fmtUSD=function(v){var a=Math.abs(v);if(a>=1e9)return '$'+(v/1e9).toFixed(1)+'B';if(a>=1e6)return '$'+(v/1e6).toFixed(1)+'M';if(a>=1e3)return '$'+(v/1e3).toFixed(0)+'K';return '$'+Math.round(v);};
+  var esc=function(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');};
+
+  function quadrant(mar,rev,xMid,yMid){
+    var hiM=mar>=xMid, hiR=rev>=yMid;
+    if(hiM&&hiR)return {k:'grow',c:Q.grow,label:'Grow & invest'};
+    if(!hiM&&hiR)return {k:'opt',c:Q.opt,label:'Optimize margin'};
+    if(hiM&&!hiR)return {k:'prot',c:Q.prot,label:'Protect & expand'};
+    return {k:'watch',c:Q.watch,label:'Watch / rationalize'};
+  }
+
+  function draw(rows,xMid){
+    var stage=document.getElementById('stage');
+    var W=stage.clientWidth||640, H=stage.clientHeight||360;
+    stage.innerHTML='';
+    if(!rows.length){return;}
+    var padL=54,padR=18,padT=14,padB=34;
+    var plotW=Math.max(10,W-padL-padR), plotH=Math.max(10,H-padT-padB);
+    var xs=rows.map(function(r){return r.x;}), ys=rows.map(function(r){return r.y;}), ss=rows.map(function(r){return r.size;});
+    var xMin=Math.min.apply(null,xs), xMax=Math.max.apply(null,xs);
+    var yMin=0, yMax=Math.max.apply(null,ys);
+    var sMax=Math.max.apply(null,ss)||1;
+    // pad domains
+    var xPad=(xMax-xMin)*0.12||1; xMin-=xPad; xMax+=xPad;
+    yMax*=1.12;
+    var yMid=(function(){var s=ys.slice().sort(function(a,b){return a-b;});return s.length?s[Math.floor(s.length/2)]:0;})();
+    var sx=function(v){return padL+(v-xMin)/(xMax-xMin||1)*plotW;};
+    var sy=function(v){return padT+plotH-(v-yMin)/(yMax-yMin||1)*plotH;};
+    var rad=function(v){return 7+Math.sqrt(v/sMax)*Math.min(30,Math.max(16,plotW/16));};
+
+    var xMidPx=sx(xMid), yMidPx=sy(yMid);
+    var svgNS='http://www.w3.org/2000/svg';
+    var svg=document.createElementNS(svgNS,'svg');
+    svg.setAttribute('viewBox','0 0 '+W+' '+H);
+    function rect(x,y,w,h,fill,op){var e=document.createElementNS(svgNS,'rect');e.setAttribute('x',x);e.setAttribute('y',y);e.setAttribute('width',Math.max(0,w));e.setAttribute('height',Math.max(0,h));e.setAttribute('fill',fill);e.setAttribute('opacity',op);svg.appendChild(e);return e;}
+    function line(x1,y1,x2,y2,st,dash){var e=document.createElementNS(svgNS,'line');e.setAttribute('x1',x1);e.setAttribute('y1',y1);e.setAttribute('x2',x2);e.setAttribute('y2',y2);e.setAttribute('stroke',st);e.setAttribute('stroke-width','1');if(dash)e.setAttribute('stroke-dasharray',dash);svg.appendChild(e);return e;}
+    function text(x,y,s,fill,size,anchor,weight){var e=document.createElementNS(svgNS,'text');e.setAttribute('x',x);e.setAttribute('y',y);e.setAttribute('fill',fill);e.setAttribute('font-size',size);e.setAttribute('text-anchor',anchor||'start');e.setAttribute('font-weight',weight||'400');e.setAttribute('font-family','Inter,Arial,sans-serif');e.textContent=s;svg.appendChild(e);return e;}
+
+    // quadrant background tints
+    rect(xMidPx,padT,padL+plotW-xMidPx,yMidPx-padT,Q.grow,0.10);          // top-right grow
+    rect(padL,padT,xMidPx-padL,yMidPx-padT,Q.opt,0.10);                    // top-left optimize
+    rect(xMidPx,yMidPx,padL+plotW-xMidPx,padT+plotH-yMidPx,Q.prot,0.09);  // bottom-right protect
+    rect(padL,yMidPx,xMidPx-padL,padT+plotH-yMidPx,Q.watch,0.10);         // bottom-left watch
+    // quadrant divider lines
+    line(xMidPx,padT,xMidPx,padT+plotH,'#3A4C86','5 4');
+    line(padL,yMidPx,padL+plotW,yMidPx,'#3A4C86','5 4');
+    // axes
+    line(padL,padT,padL,padT+plotH,'#2A3A6E');
+    line(padL,padT+plotH,padL+plotW,padT+plotH,'#2A3A6E');
+    // quadrant corner labels
+    text(padL+plotW-6,padT+14,'GROW & INVEST','#7DE0AE',10,'end',700);
+    text(padL+6,padT+14,'OPTIMIZE MARGIN','#FFC58A',10,'start',700);
+    text(padL+plotW-6,padT+plotH-8,'PROTECT & EXPAND','#93B7FF',10,'end',700);
+    text(padL+6,padT+plotH-8,'WATCH / RATIONALIZE','#A9B6D6',10,'start',700);
+    // axis titles + ticks
+    text(padL+plotW/2,H-6,'Gross margin  %  →','#9DB8FF',11,'middle',600);
+    var yt=document.createElementNS(svgNS,'text');yt.setAttribute('transform','translate(14,'+(padT+plotH/2)+') rotate(-90)');yt.setAttribute('fill','#9DB8FF');yt.setAttribute('font-size','11');yt.setAttribute('text-anchor','middle');yt.setAttribute('font-weight','600');yt.setAttribute('font-family','Inter,Arial,sans-serif');yt.textContent='Contract revenue  →';svg.appendChild(yt);
+    for(var t=0;t<=3;t++){var yv=yMin+(yMax-yMin)*t/3;text(padL-6,sy(yv)+3,fmtUSD(yv),'#6C7DA8',9,'end',400);}
+    text(xMidPx,padT+plotH+14,Math.round(xMid)+'% target','#8FA0C8',9,'middle',600);
+
+    // bubbles (largest first so small draw on top)
+    rows.slice().sort(function(a,b){return b.size-a.size;}).forEach(function(r){
+      var q=quadrant(r.x,r.y,xMid,yMid);
+      var cx=sx(r.x),cy=sy(r.y),rr=rad(r.size);
+      var c=document.createElementNS(svgNS,'circle');
+      c.setAttribute('cx',cx);c.setAttribute('cy',cy);c.setAttribute('r',rr);
+      c.setAttribute('fill',q.c);c.setAttribute('fill-opacity','0.62');
+      c.setAttribute('stroke',q.c);c.setAttribute('stroke-width','1.5');
+      c.style.cursor='default';c.style.transition='fill-opacity .1s';
+      c.addEventListener('mousemove',function(e){
+        c.setAttribute('fill-opacity','0.9');
+        tip.innerHTML='<b>'+esc(r.label)+'</b>'+(r.group?(' · '+esc(r.group)):'')+'<br>Margin '+r.x.toFixed(1)+'% · Rev '+fmtUSD(r.y)+'<br>Labor '+Math.round(r.size).toLocaleString()+' hrs<br><span class="q" style="color:'+q.c+'">'+q.label+'</span>';
+        tip.style.opacity=1;tip.style.left=(e.clientX+14)+'px';tip.style.top=(e.clientY+14)+'px';
+      });
+      c.addEventListener('mouseleave',function(){c.setAttribute('fill-opacity','0.62');tip.style.opacity=0;});
+      svg.appendChild(c);
+      if(rr>=18){var lb=text(cx,cy+3,esc(r.label).slice(0,14),'#F4F7FF',9,'middle',600);lb.setAttribute('pointer-events','none');}
+    });
+    stage.appendChild(svg);
+
+    // header stats
+    var totRev=ys.reduce(function(a,b){return a+b;},0);
+    var wMar=rows.reduce(function(a,r){return a+r.x*r.y;},0)/(totRev||1);
+    document.getElementById('cnt').textContent=rows.length;
+    document.getElementById('rev').textContent=fmtUSD(totRev);
+    document.getElementById('mar').textContent=wMar.toFixed(1)+'%';
+  }
+
+  var SEGS=['Business & Industry','Aviation','Healthcare','Education','Manufacturing','Technical Solutions'];
+  function synth(){
+    var out=[];
+    for(var i=0;i<46;i++){
+      var seg=SEGS[i%6];
+      var mar=6+16*Math.abs(Math.sin(i*0.7))+ (i%5)*0.4;
+      var rev=8e6+120e6*Math.abs(Math.sin(i*1.31))*Math.abs(Math.cos(i*0.5));
+      var lab=20000+380000*Math.abs(Math.sin(i*0.9));
+      out.push({label:seg.split(' ')[0]+' #'+(100+i),group:seg,x:mar,y:rev,size:lab});
+    }
+    return out;
+  }
+
+  var st={cfg:{},data:null,unsub:null};
+  function recompute(){
+    var c=st.cfg||{}; var xMid=parseFloat(c.xMid)||12;
+    var rows;
+    if(st.data&&c.x&&c.y&&st.data[c.x]){
+      var xv=st.data[c.x]||[],yv=st.data[c.y]||[],lb=(c.label&&st.data[c.label])||[],sz=(c.size&&st.data[c.size])||[],gp=(c.group&&st.data[c.group])||[];
+      rows=xv.map(function(x,i){return {label:lb[i]!=null?String(lb[i]):('#'+i),group:gp[i]!=null?String(gp[i]):'',x:Number(x)||0,y:Number(yv[i])||0,size:Number(sz[i])||1};})
+             .filter(function(r){return isFinite(r.x)&&isFinite(r.y);});
+      if(!rows.length)rows=synth();
+    }else{rows=synth();}
+    draw(rows,xMid);
+  }
+
+  var ro=new ResizeObserver(function(){recompute();});
+  ro.observe(document.getElementById('stage'));
+
+  if(client){
+    client.config.subscribe(function(cfg){
+      st.cfg=cfg||{};
+      if(st.unsub){st.unsub();st.unsub=null;}
+      if(cfg&&cfg.source){st.unsub=client.elements.subscribeToElementData(cfg.source,function(d){st.data=d;recompute();});}
+      recompute();
+    });
+  }else{recompute();}
+})();
+</script>
+</body>
+</html>

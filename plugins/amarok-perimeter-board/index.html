@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AMAROK Perimeter Board</title>
+<style>
+  :root{
+    --ink:#231F20; --ink-soft:#5B5658; --red:#ED1C24; --teal:#199FB9;
+    --amber:#F2703A; --mint:#4BC0AF; --line:#DCE4EE; --card:#FFFFFF;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;height:100%;background:transparent;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+    color:var(--ink);-webkit-font-smoothing:antialiased}
+  #stage{height:100%;width:100%;padding:10px 12px 8px;display:flex;flex-direction:column;overflow:hidden}
+  .hdr{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;flex:0 0 auto}
+  .hdr h1{margin:0;font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--ink)}
+  .hdr .sub{font-size:10px;color:var(--ink-soft);letter-spacing:.02em}
+  .key{display:flex;gap:10px;font-size:9px;color:var(--ink-soft);align-items:center}
+  .key i{width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:3px;vertical-align:-1px}
+  .rows{flex:1 1 auto;display:flex;flex-direction:column;gap:0;min-height:0}
+  .row{flex:1 1 0;display:grid;grid-template-columns:118px 1fr 74px;align-items:center;
+    gap:8px;border-top:1px solid var(--line);min-height:0}
+  .row:first-child{border-top:none}
+  .nm{font-size:10.5px;font-weight:600;line-height:1.15;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .nm .meta{display:block;font-weight:500;font-size:9px;color:var(--ink-soft);letter-spacing:.02em}
+  .fence{position:relative;height:26px}
+  .fence svg{display:block;width:100%;height:100%;overflow:visible}
+  .val{text-align:right;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
+  .val span{display:block;font-size:9px;font-weight:600;letter-spacing:.03em}
+  .empty{display:flex;height:100%;align-items:center;justify-content:center;
+    font-size:11px;color:var(--ink-soft)}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="hdr">
+    <div>
+      <h1 id="title">Perimeter Board</h1>
+      <div class="sub" id="sub">&nbsp;</div>
+    </div>
+    <div class="key">
+      <span><i style="background:var(--mint)"></i>Ahead of plan</span>
+      <span><i style="background:var(--teal)"></i>On plan</span>
+      <span><i style="background:var(--amber)"></i>Behind</span>
+      <span><i style="background:var(--red)"></i>&lt;90% of plan</span>
+    </div>
+  </div>
+  <div class="rows" id="rows"></div>
+</div>
+
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<script>
+(function(){
+  var client = window.sigmaComputing && window.sigmaComputing.plugin
+    ? window.sigmaComputing.plugin.client : null;
+  var stage = document.getElementById('stage');
+  var rowsEl = document.getElementById('rows');
+  var subEl  = document.getElementById('sub');
+  var unsub = null, state = null;
+
+  // ---- the perimeter metaphor -------------------------------------------
+  // One row per service line, drawn as a run of energised fence: posts spaced
+  // along the run, wires strung between them, and the ENERGISED portion of
+  // the run coloured by plan attainment. A line at 100% of plan lights its
+  // whole perimeter; a line behind plan leaves a dark, unenergised gap.
+  // Thresholds match the Status the command center already shows for each
+  // service line -- a plugin that calls a line "Behind" while the table two
+  // rows up calls it "On plan" is the first thing an analyst spots.
+  function band(goal){
+    if (goal >= 1.03) return {c:'#4BC0AF', label:'Ahead'};
+    if (goal >= 0.97) return {c:'#199FB9', label:'On plan'};
+    if (goal >= 0.90) return {c:'#F2703A', label:'Behind'};
+    return {c:'#ED1C24', label:'Critical'};
+  }
+  function fmtM(v){
+    if (v == null || isNaN(v)) return '--';
+    return '$' + (Math.round(v * 10) / 10).toFixed(1) + 'M';
+  }
+
+  function fenceSVG(fillPct, colour, posts){
+    // Geometry is in a 0..100 x 0..26 user space; the SVG scales to the row.
+    var y0 = 4, y1 = 22, w = 100;
+    var lit = Math.max(0, Math.min(1, fillPct)) * w;
+    var s = '<svg viewBox="0 0 100 26" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">';
+    // dark, unenergised run underneath
+    s += '<rect x="0" y="' + y0 + '" width="' + w + '" height="' + (y1 - y0)
+       + '" fill="#231F20" fill-opacity="0.06"/>';
+    // energised run
+    s += '<rect x="0" y="' + y0 + '" width="' + lit.toFixed(2) + '" height="'
+       + (y1 - y0) + '" fill="' + colour + '" fill-opacity="0.16"/>';
+    // three strung wires across the whole run; the lit portion is solid
+    for (var w_i = 0; w_i < 3; w_i++){
+      var wy = y0 + 3 + w_i * ((y1 - y0 - 6) / 2);
+      s += '<line x1="0" y1="' + wy + '" x2="' + w + '" y2="' + wy
+         + '" stroke="#231F20" stroke-opacity="0.14" stroke-width="0.7"'
+         + ' vector-effect="non-scaling-stroke"/>';
+      s += '<line x1="0" y1="' + wy + '" x2="' + lit.toFixed(2) + '" y2="' + wy
+         + '" stroke="' + colour + '" stroke-width="1.3"'
+         + ' vector-effect="non-scaling-stroke"/>';
+    }
+    // posts along the run -- post count carries relative site density
+    var n = Math.max(3, Math.min(28, posts));
+    for (var i = 0; i <= n; i++){
+      var px = (i / n) * w;
+      var on = px <= lit;
+      s += '<line x1="' + px.toFixed(2) + '" y1="' + (y0 - 2) + '" x2="'
+         + px.toFixed(2) + '" y2="' + (y1 + 2) + '" stroke="'
+         + (on ? colour : '#231F20') + '" stroke-opacity="' + (on ? 0.85 : 0.18)
+         + '" stroke-width="1" vector-effect="non-scaling-stroke"/>';
+    }
+    // the energised leading edge -- where the perimeter stops being live
+    s += '<line x1="' + lit.toFixed(2) + '" y1="' + (y0 - 3) + '" x2="'
+       + lit.toFixed(2) + '" y2="' + (y1 + 3) + '" stroke="' + colour
+       + '" stroke-width="2" vector-effect="non-scaling-stroke"/>';
+    s += '</svg>';
+    return s;
+  }
+
+  function render(){
+    if (!state || !state.rows || !state.rows.length){
+      rowsEl.innerHTML = '<div class="empty">No service lines in scope.</div>';
+      return;
+    }
+    var rows = state.rows.slice(0, 8);
+    var maxArr = 0, totArr = 0;
+    rows.forEach(function(r){ if (r.arr > maxArr) maxArr = r.arr; totArr += r.arr; });
+    if (!maxArr) maxArr = 1;
+
+    rowsEl.innerHTML = rows.map(function(r){
+      var b = band(r.goal);
+      // run length is share of the largest line's ARR; fill is plan attainment
+      var run = Math.max(0.14, r.arr / maxArr);
+      var posts = Math.round(4 + run * 22);
+      return '<div class="row">'
+        + '<div class="nm">' + esc(r.name)
+        +   '<span class="meta">' + (r.goal ? (r.goal * 100).toFixed(0) + '% of plan' : '--')
+        +   ' &middot; ' + b.label + '</span></div>'
+        + '<div class="fence" style="width:' + (run * 100).toFixed(1) + '%">'
+        +   fenceSVG(r.goal || 0, b.c, posts) + '</div>'
+        + '<div class="val" style="color:' + b.c + '">' + fmtM(r.arr)
+        +   '<span style="color:var(--ink-soft)">ARR IN SERVICE</span></div>'
+        + '</div>';
+    }).join('');
+
+    subEl.textContent = rows.length + ' service lines · '
+      + fmtM(totArr) + ' recurring revenue in service · '
+      + 'lit run = share of plan attained';
+  }
+
+  function esc(s){
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];
+    });
+  }
+
+  // Unbound fallback so the plugin still reads correctly in the editor.
+  function synth(){
+    return {rows:[
+      {name:'Electric Guard Dog Fence', arr:96,  goal:1.038},
+      {name:'FORTIFEYE Video',          arr:31,  goal:1.061},
+      {name:'Perimeter Detection',      arr:19,  goal:0.981},
+      {name:'Gate & Access Control',    arr:13,  goal:0.942},
+      {name:'Sentinels',                arr:11,  goal:1.014},
+      {name:'Portable Fence',           arr:6,   goal:0.908}
+    ]};
+  }
+
+  function ingest(data, cfg){
+    // Sigma hands back a column-oriented map keyed by the configured column id.
+    var pc = cfg.product, bc = cfg.balance, gc = cfg.goal;
+    var names = (pc && data[pc]) || [];
+    var bals  = (bc && data[bc]) || [];
+    var goals = (gc && data[gc]) || [];
+    var out = [];
+    for (var i = 0; i < names.length; i++){
+      // product_cards.sql carries balances in $B; this board reads in $MM.
+      out.push({name:names[i], arr:Number(bals[i]) * 1000, goal:Number(goals[i])});
+    }
+    out.sort(function(a, b){ return b.arr - a.arr; });
+    state = {rows:out};
+    render();
+  }
+
+  if (client){
+    client.config.configureEditorPanel([
+      {name:'source',  type:'element'},
+      {name:'product', type:'column', source:'source', allowedTypes:['text'],   label:'Service line'},
+      {name:'balance', type:'column', source:'source', allowedTypes:['number'], label:'ARR in service ($B)'},
+      {name:'members', type:'column', source:'source', allowedTypes:['number'], label:'Protected sites'},
+      {name:'goal',    type:'column', source:'source', allowedTypes:['number'], label:'Plan attainment'}
+    ]);
+    client.config.subscribe(function(cfg){
+      if (unsub){ try { unsub(); } catch(e){} unsub = null; }
+      if (cfg && cfg.source && cfg.product){
+        unsub = client.elements.subscribeToElementData(cfg.source, function(d){
+          try { ingest(d, cfg); } catch(e){ state = synth(); render(); }
+        });
+      } else {
+        state = synth(); render();
+      }
+    });
+  } else {
+    state = synth(); render();
+  }
+
+  // ResizeObserver on the stage element, per the plugin rules -- a window
+  // resize listener does not fire when only the Sigma element is resized.
+  if (window.ResizeObserver){
+    new ResizeObserver(function(){ if (state) render(); }).observe(stage);
+  }
+  state = synth(); render();
+})();
+</script>
+</body>
+</html>

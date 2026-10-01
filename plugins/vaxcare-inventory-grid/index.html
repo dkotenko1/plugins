@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Days-of-Supply Inventory Grid</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  html,body{margin:0;height:100%;background:#FFFFFF;font-family:Inter,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#32373C;}
+  #wrap{position:relative;width:100%;height:100%;overflow:auto;}
+  svg{display:block;}
+  .rlab{fill:#32373C;font-size:11.5px;font-weight:600;}
+  .clab{fill:#5A5A5A;font-size:10.5px;font-weight:700;}
+  .cell{stroke:#FFFFFF;stroke-width:2;cursor:pointer;}
+  .cval{font-size:11px;font-weight:700;pointer-events:none;}
+  .csub{font-size:8.5px;font-weight:600;pointer-events:none;}
+  #legend{position:absolute;top:6px;right:12px;background:rgba(255,255,255,.94);border:1px solid #EADFF6;border-radius:10px;padding:7px 10px;font-size:10.5px;line-height:1.5;box-shadow:0 2px 8px rgba(122,0,223,.10);}
+  #legend .row{display:flex;align-items:center;gap:6px;}
+  #legend .sw{width:11px;height:11px;border-radius:3px;display:inline-block;}
+  #tip{position:absolute;pointer-events:none;opacity:0;background:#2A0A44;color:#fff;padding:7px 9px;border-radius:8px;font-size:11px;line-height:1.55;box-shadow:0 4px 14px rgba(0,0,0,.28);transform:translate(-50%,-118%);white-space:nowrap;z-index:5;}
+  #tip b{color:#F7A8E4;}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <svg id="svg"></svg>
+  <div id="legend"></div>
+  <div id="tip"></div>
+</div>
+<script>
+const PURPLE="#7A00DF", MAGENTA="#C92C99", CORAL="#FC6978", DEEP="#4A008A";
+// days-of-supply band colors: critical red -> low amber -> healthy green -> overstock blue
+const C_CRIT="#E5484D", C_LOW="#F5A623", C_OK="#2FB170", C_HEALTHY="#1F9E5A", C_OVER="#4C8DD6";
+function bandOf(v){
+  if(v==null||!isFinite(v)) return {c:"#E6E6EA",lab:"No stock data"};
+  if(v<7)  return {c:C_CRIT,   lab:"Critical · reorder now"};
+  if(v<14) return {c:C_LOW,    lab:"Low · below target"};
+  if(v<=28)return {c:C_HEALTHY,lab:"Healthy · on target"};
+  return       {c:C_OVER,   lab:"Overstock · expiry risk"};
+}
+const fmtD=v=> v==null||!isFinite(v)? "—" : Math.round(v);
+
+// ---- synthetic fallback so it previews standalone ----
+function synth(){
+  const practices=["Sunrise Pediatrics","Lakeside Family Med","Metro Internal Med","Harbor OB-GYN","Cedar Health System","Valley Primary Care","Northside Peds","Gulf Coast Family","Summit Health Partners","Riverbend Clinic"];
+  const vaccines=["Influenza","COVID-19","RSV","Tdap","HPV","Pneumococcal","Shingles","MMR"];
+  const rows=[]; let s=13;
+  const rnd=()=>{s=(s*9301+49297)%233280;return s/233280;};
+  for(const p of practices){ for(const v of vaccines){
+    const base=[6,10,17,22,31][Math.floor(rnd()*5)];
+    const dos=Math.max(0,Math.round(base+(rnd()-0.5)*10));
+    rows.push({row:p,col:v,value:dos});
+  }}
+  return rows;
+}
+
+let DATA=synth();
+
+function draw(){
+  const wrap=document.getElementById("wrap");
+  const svg=document.getElementById("svg");
+  const rows=DATA.filter(d=>d&&d.row!=null&&d.col!=null);
+  if(!rows.length){svg.innerHTML="";return;}
+  // build ordered unique row & col lists
+  const rlist=[], clist=[];
+  for(const d of rows){ if(!rlist.includes(d.row)) rlist.push(d.row); if(!clist.includes(d.col)) clist.push(d.col); }
+  const lookup={}; for(const d of rows){ lookup[d.row+"||"+d.col]=d.value; }
+
+  const rowH=34, colW=Math.max(74,Math.min(120,Math.floor((( (wrap.clientWidth||820)-190))/Math.max(1,clist.length))));
+  const mL=178, mT=42, mR=14, mB=10;
+  const W=mL+clist.length*colW+mR;
+  const H=mT+rlist.length*rowH+mB;
+  svg.setAttribute("width",W); svg.setAttribute("height",H);
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  let g="";
+  // column headers
+  clist.forEach((c,ci)=>{
+    const x=mL+ci*colW+colW/2;
+    g+=`<text class="clab" x="${x}" y="${mT-14}" text-anchor="middle">${esc(c)}</text>`;
+  });
+  // rows
+  rlist.forEach((r,ri)=>{
+    const y=mT+ri*rowH;
+    g+=`<text class="rlab" x="${mL-10}" y="${y+rowH/2+4}" text-anchor="end">${esc(clip(r,24))}</text>`;
+    clist.forEach((c,ci)=>{
+      const x=mL+ci*colW;
+      const v=lookup[r+"||"+c];
+      const b=bandOf(v);
+      g+=`<rect class="cell" x="${x+2}" y="${y+2}" width="${colW-4}" height="${rowH-4}" rx="6" fill="${b.c}"`+
+         ` data-r="${enc(r)}" data-c="${enc(c)}" data-v="${v==null?"":v}" data-l="${enc(b.lab)}"/>`;
+      const txtCol = (v!=null&&isFinite(v)) ? "#FFFFFF" : "#9A9AA2";
+      g+=`<text class="cval" x="${x+colW/2}" y="${y+rowH/2+1}" text-anchor="middle" fill="${txtCol}">${fmtD(v)}</text>`;
+      g+=`<text class="csub" x="${x+colW/2}" y="${y+rowH/2+13}" text-anchor="middle" fill="${txtCol}" opacity="0.85">days</text>`;
+    });
+  });
+  svg.innerHTML=g;
+  // legend
+  document.getElementById("legend").innerHTML=
+    `<div class="row"><span class="sw" style="background:${C_CRIT}"></span>&lt; 7 days · critical</div>`+
+    `<div class="row"><span class="sw" style="background:${C_LOW}"></span>7–13 · low</div>`+
+    `<div class="row"><span class="sw" style="background:${C_HEALTHY}"></span>14–28 · healthy</div>`+
+    `<div class="row"><span class="sw" style="background:${C_OVER}"></span>&gt; 28 · overstock/expiry</div>`;
+  // tooltips
+  const tip=document.getElementById("tip");
+  svg.querySelectorAll(".cell").forEach(el=>{
+    el.addEventListener("mousemove",e=>{
+      const rc=wrap.getBoundingClientRect();
+      tip.style.left=(e.clientX-rc.left+wrap.scrollLeft)+"px";
+      tip.style.top=(e.clientY-rc.top+wrap.scrollTop)+"px"; tip.style.opacity=1;
+      const v=el.dataset.v===""?null:+el.dataset.v;
+      tip.innerHTML=`<b>${dec(el.dataset.r)}</b> · ${dec(el.dataset.c)}<br>`+
+        `${v==null?"No stock data":fmtD(v)+" days of supply"}<br>${dec(el.dataset.l)}`;
+      el.setAttribute("stroke","#2A0A44");
+    });
+    el.addEventListener("mouseleave",()=>{tip.style.opacity=0;el.setAttribute("stroke","#FFFFFF");});
+  });
+}
+function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function clip(s,n){s=String(s);return s.length>n?s.slice(0,n-1)+"…":s;}
+function enc(s){return encodeURIComponent(String(s));}
+function dec(s){return decodeURIComponent(s);}
+
+// ---- Sigma wiring ----
+var client=(window.sigmaComputing&&window.sigmaComputing.plugin&&window.sigmaComputing.plugin.client)||null;
+var st={cfg:{},data:null,unsub:null};
+function recompute(){
+  var c=st.cfg||{};
+  if(st.data && c.row && st.data[c.row] && c.col && st.data[c.col] && c.value && st.data[c.value]){
+    var R=st.data[c.row]||[], C=st.data[c.col]||[], V=st.data[c.value]||[];
+    var n=Math.min(R.length,C.length,V.length), rows=[];
+    for(var i=0;i<n;i++) rows.push({row:R[i]!=null?String(R[i]):"", col:C[i]!=null?String(C[i]):"", value:V[i]!=null?Number(V[i]):null});
+    if(rows.length){ DATA=rows; draw(); return; }
+  }
+  DATA=synth(); draw();
+}
+if(client){
+  client.config.configureEditorPanel([
+    {name:"source", type:"element"},
+    {name:"row", type:"column", source:"source", label:"Practice / site (rows)"},
+    {name:"col", type:"column", source:"source", label:"Vaccine type (columns)"},
+    {name:"value", type:"column", source:"source", allowedTypes:["number","integer"], label:"Days of supply"}
+  ]);
+  client.config.subscribe(function(cfg){
+    st.cfg=cfg||{};
+    if(st.unsub){st.unsub();st.unsub=null;}
+    if(cfg&&cfg.source){ st.unsub=client.elements.subscribeToElementData(cfg.source,function(d){st.data=d;recompute();}); }
+    recompute();
+  });
+} else { recompute(); }
+
+new ResizeObserver(function(){draw();}).observe(document.getElementById("wrap"));
+window.addEventListener("resize",draw);
+draw();
+</script>
+</body>
+</html>

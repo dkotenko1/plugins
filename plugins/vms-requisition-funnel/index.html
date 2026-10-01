@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Requisition Fill Funnel — SimplifyVMS Sigma Plugin</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,Arial,sans-serif;background:transparent;color:#0E2A4E;overflow:hidden}
+  #wrap{height:100%;width:100%;display:flex;flex-direction:column;padding:14px 18px;gap:8px}
+  #top{display:flex;justify-content:space-between;align-items:baseline}
+  #ttl{font-size:13px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#0686FF}
+  #meta{font-size:12px;color:#6B7A90}
+  #meta b{color:#0E2A4E;font-size:14px}
+  #funnel{flex:1;display:flex;flex-direction:column;gap:6px;justify-content:center;min-height:0}
+  .row{display:flex;align-items:center;gap:10px;min-height:0}
+  .lbl{width:112px;flex:none;text-align:right;font-size:11.5px;font-weight:600;color:#33445F;line-height:1.15}
+  .barwrap{flex:1;position:relative;height:100%;display:flex;align-items:center}
+  .bar{height:80%;border-radius:6px;display:flex;align-items:center;justify-content:flex-end;padding:0 10px;color:#fff;font-weight:700;font-size:12.5px;min-width:34px;box-shadow:0 1px 3px rgba(6,134,255,.25);transition:width .25s ease}
+  .conv{width:74px;flex:none;font-size:11px;color:#6B7A90;text-align:left}
+  .conv b{color:#17B8A6}
+  .conv.drop b{color:#E4572E}
+  #tip{position:fixed;pointer-events:none;background:#0E2A4E;color:#EAF3FF;border-radius:8px;padding:8px 10px;font-size:11px;opacity:0;transition:opacity .1s;z-index:10;white-space:nowrap;box-shadow:0 6px 20px rgba(14,42,78,.4)}
+  #tip b{color:#7CC0FF}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="top">
+    <div id="ttl">Requisition Fill Funnel</div>
+    <div id="meta"><span id="cnt">0</span> stages · top <b id="topv">—</b> · fill rate <b id="fill">—</b></div>
+  </div>
+  <div id="funnel"></div>
+</div>
+<div id="tip"></div>
+<script>
+(function(){
+  var client=(window.sigmaComputing&&window.sigmaComputing.plugin&&window.sigmaComputing.plugin.client)||null;
+  var defs=[
+    {name:'source',type:'element'},
+    {name:'stage',type:'column',source:'source',label:'Stage'},
+    {name:'value',type:'column',source:'source',allowedTypes:['number','integer'],label:'Candidates'},
+    {name:'order',type:'column',source:'source',allowedTypes:['number','integer'],label:'Stage order (optional)'}
+  ];
+  if(client) client.config.configureEditorPanel(defs);
+
+  var tip=document.getElementById('tip');
+  // Blue gradient darkening down the funnel: #6FB6FF (top) -> #0454B4 (bottom)
+  function stageColor(t){ // t 0..1
+    var s=[[111,182,255],[6,134,255],[4,84,180]];
+    var seg=t*2, i=Math.min(1,Math.floor(seg)), f=seg-i;
+    function l(a,b){return Math.round(a+(b-a)*f);}
+    var r=l(s[i][0],s[i+1][0]),g=l(s[i][1],s[i+1][1]),b=l(s[i][2],s[i+1][2]);
+    return 'rgb('+r+','+g+','+b+')';
+  }
+  function fmt(n){ n=Number(n)||0;
+    if(n>=1e6) return (n/1e6).toFixed(1)+'M';
+    if(n>=1e3) return (n/1e3).toFixed(1)+'K';
+    return String(Math.round(n));
+  }
+
+  function draw(rows){
+    var f=document.getElementById('funnel'); f.innerHTML='';
+    if(!rows.length){return;}
+    var top=rows[0].value||1, max=Math.max.apply(null,rows.map(function(r){return r.value;}))||1;
+    rows.forEach(function(r,i){
+      var t=rows.length>1?i/(rows.length-1):0;
+      var prev=i>0?rows[i-1].value:null;
+      var stepPct=prev?(r.value/prev):null;
+      var totPct=r.value/top;
+      var row=document.createElement('div'); row.className='row';
+      var lbl=document.createElement('div'); lbl.className='lbl'; lbl.textContent=r.stage;
+      var bw=document.createElement('div'); bw.className='barwrap';
+      var bar=document.createElement('div'); bar.className='bar';
+      bar.style.width=Math.max(4,(r.value/max)*100)+'%';
+      bar.style.background=stageColor(t);
+      bar.textContent=fmt(r.value);
+      var conv=document.createElement('div');
+      conv.className='conv'+(stepPct!=null&&stepPct<0.5?' drop':'');
+      conv.innerHTML = stepPct==null ? (Math.round(totPct*100)+'% start')
+        : ('<b>'+Math.round(stepPct*100)+'%</b> →');
+      bar.addEventListener('mousemove',function(e){
+        tip.innerHTML='<b>'+r.stage+'</b><br>'+fmt(r.value)+' candidates · '+Math.round(totPct*100)+'% of top'
+          +(stepPct!=null?('<br>step conversion '+Math.round(stepPct*100)+'%'):'');
+        tip.style.opacity=1; tip.style.left=(e.clientX+12)+'px'; tip.style.top=(e.clientY+12)+'px';
+      });
+      bar.addEventListener('mouseleave',function(){tip.style.opacity=0;});
+      bw.appendChild(bar); row.appendChild(lbl); row.appendChild(bw); row.appendChild(conv);
+      f.appendChild(row);
+    });
+    document.getElementById('cnt').textContent=rows.length;
+    document.getElementById('topv').textContent=fmt(top);
+    document.getElementById('fill').textContent=Math.round((rows[rows.length-1].value/top)*100)+'%';
+  }
+
+  function synth(){
+    var stages=['Open Reqs','Submitted','Interview','Offer','Placed','Onboarded'];
+    var rates=[1,0.62,0.38,0.19,0.14,0.12], base=4200;
+    return stages.map(function(s,i){return {stage:s,value:Math.round(base*rates[i]),order:i};});
+  }
+
+  var st={cfg:{},data:null,unsub:null,last:null};
+  function recompute(){
+    var c=st.cfg||{}, rows=null;
+    if(st.data&&c.stage&&c.value&&st.data[c.stage]&&st.data[c.value]){
+      var stage=st.data[c.stage]||[], value=st.data[c.value]||[], order=(c.order&&st.data[c.order])||null;
+      // aggregate by stage label (sum) in case the element is unaggregated
+      var agg={}, ord={}, seen=[];
+      stage.forEach(function(s,i){
+        var k=String(s);
+        if(!(k in agg)){agg[k]=0; ord[k]=order?Number(order[i]):seen.length; seen.push(k);}
+        agg[k]+=Number(value[i])||0;
+      });
+      rows=seen.map(function(k){return {stage:k,value:agg[k],order:ord[k]};});
+      rows.sort(function(a,b){return a.order-b.order;});
+    }
+    if(!rows||!rows.length) rows=synth();
+    st.last=rows; draw(rows);
+  }
+
+  // Redraw on container resize — Sigma sizes the panel AFTER first paint.
+  if(window.ResizeObserver){ new ResizeObserver(function(){ if(st.last) draw(st.last); }).observe(document.getElementById('funnel')); }
+  window.addEventListener('resize',function(){ if(st.last) draw(st.last); });
+
+  if(client){
+    client.config.subscribe(function(cfg){
+      st.cfg=cfg||{};
+      if(st.unsub){st.unsub();st.unsub=null;}
+      if(cfg&&cfg.source){st.unsub=client.elements.subscribeToElementData(cfg.source,function(d){st.data=d;recompute();});}
+      recompute();
+    });
+  }else{ recompute(); }
+})();
+</script>
+</body>
+</html>

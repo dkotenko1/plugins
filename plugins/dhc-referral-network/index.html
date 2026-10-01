@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Provider Referral Network</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:transparent;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:#2B0F4F;-webkit-font-smoothing:antialiased}
+  #stage{position:relative;width:100%;height:100%;overflow:hidden}
+  #svg{display:block;width:100%;height:100%}
+  .nodeLabel{font-size:11px;font-weight:600;fill:#2B0F4F}
+  .nodeSub{font-size:9.5px;font-weight:500;fill:#7A6B92}
+  .colHead{font-size:9px;font-weight:700;letter-spacing:.09em;fill:#9186A6;
+    text-transform:uppercase}
+  .ribbon{cursor:pointer;transition:opacity .12s ease}
+  #stage.dim .ribbon{opacity:.16}
+  #stage.dim .ribbon.on{opacity:.92}
+  #tip{position:absolute;pointer-events:none;opacity:0;transition:opacity .1s ease;
+    background:#1A0733;color:#fff;border-radius:6px;padding:7px 9px;font-size:10.5px;
+    line-height:1.45;box-shadow:0 6px 18px rgba(26,7,51,.34);max-width:230px;z-index:5}
+  #tip b{font-weight:700}
+  #tip .k{color:#C6B0FF;font-weight:600}
+  #legend{position:absolute;left:12px;bottom:8px;display:flex;align-items:center;
+    gap:7px;font-size:9px;font-weight:600;color:#9186A6;letter-spacing:.05em}
+  #legend .bar{width:96px;height:7px;border-radius:4px;
+    background:linear-gradient(90deg,#1FA36B 0%,#E1A32D 52%,#D6365A 100%)}
+  #empty{position:absolute;inset:0;display:none;align-items:center;
+    justify-content:center;font-size:11px;color:#9186A6}
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
+  <div id="legend"><span>IN-NETWORK</span><span class="bar"></span><span>LEAKED</span></div>
+  <div id="tip"></div>
+  <div id="empty">No referral flows to display</div>
+</div>
+<script>
+(function () {
+  var SVGNS = "http://www.w3.org/2000/svg";
+  var stage = document.getElementById("stage");
+  var svg   = document.getElementById("svg");
+  var tip   = document.getElementById("tip");
+  var emptyEl = document.getElementById("empty");
+  var rows = null;
+
+  // --- leakage colour scale: green (retained) -> amber -> red (leaked)
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function mix(c1, c2, t) {
+    return "rgb(" + Math.round(lerp(c1[0], c2[0], t)) + "," +
+                    Math.round(lerp(c1[1], c2[1], t)) + "," +
+                    Math.round(lerp(c1[2], c2[2], t)) + ")";
+  }
+  var GOOD = [31, 163, 107], MIDC = [225, 163, 45], BADC = [214, 54, 90];
+  function leakColor(p) {
+    var t = Math.max(0, Math.min(1, (p - 0.05) / 0.45));   // 5%..50% span
+    return t < 0.5 ? mix(GOOD, MIDC, t / 0.5) : mix(MIDC, BADC, (t - 0.5) / 0.5);
+  }
+
+  function fmtK(v) {
+    if (v >= 1000) return (v / 1000).toFixed(1) + "M";
+    return v >= 100 ? Math.round(v) + "K" : v.toFixed(1) + "K";
+  }
+
+  // last-resort guard: an unexpectedly long setting name still must not run
+  // off the edge of the stage
+  function clip(t, n) { return t.length <= n ? t : t.slice(0, n - 1) + "\u2026"; }
+
+  function el(name, attrs) {
+    var n = document.createElementNS(SVGNS, name);
+    for (var k in attrs) if (attrs[k] !== null && attrs[k] !== undefined)
+      n.setAttribute(k, attrs[k]);
+    return n;
+  }
+
+  // --- fallback so the plugin looks right before it is bound to data
+  function synth() {
+    var s = ["Primary Care", "Urgent Care", "Emergency Dept", "Occ. Health"];
+    var t = ["Specialist Clinic", "Diagnostic Imaging", "Ambulatory Surg",
+             "Inpatient Acute", "Oncology Center", "Post-Acute"];
+    var out = [], seed = 7;
+    function rnd() { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; }
+    for (var i = 0; i < s.length; i++)
+      for (var j = 0; j < t.length; j++)
+        if (rnd() > 0.36)
+          out.push({ src: s[i], so: i + 1, tgt: t[j], to: j + 1,
+                     ref: 40 + rnd() * 420, leak: 0.07 + rnd() * 0.40,
+                     days: Math.round(1 + rnd() * 22) });
+    return out;
+  }
+
+  function draw() {
+    var data = (rows && rows.length) ? rows : synth();
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    stage.classList.remove("dim");
+
+    var W = stage.clientWidth || 520, H = stage.clientHeight || 300;
+    if (W < 40 || H < 40) return;
+    emptyEl.style.display = data.length ? "none" : "flex";
+    if (!data.length) return;
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+
+    var PADT = 22, PADB = 20, GAPN = 6;
+    // Gutters must fit the longest node label at 11px (~150px for
+    // "Diagnostic Imaging" plus its sublabel); 118px clipped three of them.
+    var GUT = Math.max(120, Math.min(168, W * 0.21));
+    var LX = GUT, RX = W - GUT;            // ribbon start / end x
+    if (RX - LX < 60) { LX = W * 0.30; RX = W * 0.70; }
+
+    // --- aggregate node totals, preserving the SQL's own ordering columns
+    function side(keyN, keyO) {
+      var map = {}, order = [];
+      data.forEach(function (d) {
+        var k = d[keyN];
+        if (!map[k]) { map[k] = { name: k, ord: d[keyO], total: 0, leakW: 0 }; order.push(k); }
+        map[k].total += d.ref;
+        map[k].leakW += d.ref * d.leak;
+      });
+      var arr = order.map(function (k) { return map[k]; });
+      arr.sort(function (a, b) { return (a.ord - b.ord) || (b.total - a.total); });
+      return arr;
+    }
+    var left = side("src", "so"), right = side("tgt", "to");
+
+    function layout(nodes) {
+      var tot = nodes.reduce(function (s, n) { return s + n.total; }, 0) || 1;
+      var avail = H - PADT - PADB - GAPN * (nodes.length - 1);
+      if (avail < nodes.length * 4) avail = nodes.length * 4;
+      var y = PADT;
+      nodes.forEach(function (n) {
+        n.h = Math.max(4, avail * (n.total / tot));
+        n.y = y; n.cursor = y; y += n.h + GAPN;
+      });
+      return nodes;
+    }
+    layout(left); layout(right);
+
+    // --- column headers
+    svg.appendChild(Object.assign(el("text", { x: 8, y: 12, class: "colHead" }),
+      { textContent: "Referring setting" }));
+    var rh = el("text", { x: W - 8, y: 12, class: "colHead", "text-anchor": "end" });
+    rh.textContent = "Receiving setting";
+    svg.appendChild(rh);
+
+    // --- ribbons, thickest first so thin ones stay clickable on top
+    var sorted = data.slice().sort(function (a, b) { return b.ref - a.ref; });
+    var gRib = el("g", {});
+    svg.appendChild(gRib);
+
+    sorted.forEach(function (d, i) {
+      var L = left.find(function (n) { return n.name === d.src; });
+      var R = right.find(function (n) { return n.name === d.tgt; });
+      if (!L || !R) return;
+      var lh = L.h * (d.ref / L.total), rhh = R.h * (d.ref / R.total);
+      var y0 = L.cursor, y1 = L.cursor + lh;
+      var y2 = R.cursor, y3 = R.cursor + rhh;
+      L.cursor += lh; R.cursor += rhh;
+      var cx = (LX + RX) / 2;
+      var p = "M" + LX + "," + y0 +
+              "C" + cx + "," + y0 + " " + cx + "," + y2 + " " + RX + "," + y2 +
+              "L" + RX + "," + y3 +
+              "C" + cx + "," + y3 + " " + cx + "," + y1 + " " + LX + "," + y1 + "Z";
+      var col = leakColor(d.leak);
+      var rib = el("path", { d: p, fill: col, "fill-opacity": .60,
+                             stroke: col, "stroke-opacity": .30, "stroke-width": .6,
+                             class: "ribbon" });
+      rib.addEventListener("mouseenter", function (ev) {
+        stage.classList.add("dim"); rib.classList.add("on");
+        tip.innerHTML = "<b>" + d.src + " → " + d.tgt + "</b><br/>" +
+          '<span class="k">Referrals</span> ' + fmtK(d.ref) + "<br/>" +
+          '<span class="k">Out-of-network</span> ' + (d.leak * 100).toFixed(1) + "%<br/>" +
+          '<span class="k">Referral-to-appt</span> ' + d.days + " days";
+        tip.style.opacity = 1;
+        move(ev);
+      });
+      rib.addEventListener("mousemove", move);
+      rib.addEventListener("mouseleave", function () {
+        stage.classList.remove("dim"); rib.classList.remove("on");
+        tip.style.opacity = 0;
+      });
+      function move(ev) {
+        var r = stage.getBoundingClientRect();
+        var x = ev.clientX - r.left + 12, y = ev.clientY - r.top + 12;
+        if (x + 240 > r.width) x = ev.clientX - r.left - 240;
+        if (y + 90 > r.height) y = ev.clientY - r.top - 90;
+        tip.style.left = Math.max(2, x) + "px";
+        tip.style.top = Math.max(2, y) + "px";
+      }
+      gRib.appendChild(rib);
+    });
+
+    // --- node bars + labels
+    function nodes(arr, x, anchor, labelX) {
+      arr.forEach(function (n) {
+        var avgLeak = n.leakW / (n.total || 1);
+        svg.appendChild(el("rect", { x: x, y: n.y, width: 7, height: n.h, rx: 2.5,
+                                     fill: leakColor(avgLeak) }));
+        var midY = n.y + n.h / 2;
+        var t1 = el("text", { x: labelX, y: midY - 1, class: "nodeLabel",
+                              "text-anchor": anchor });
+        t1.textContent = clip(n.name, Math.max(14, Math.floor((GUT - 16) / 6.4)));
+        svg.appendChild(t1);
+        var t2 = el("text", { x: labelX, y: midY + 11, class: "nodeSub",
+                              "text-anchor": anchor });
+        t2.textContent = fmtK(n.total) + " · " + (avgLeak * 100).toFixed(0) + "% out";
+        svg.appendChild(t2);
+      });
+    }
+    nodes(left, LX - 7, "end", LX - 13);
+    nodes(right, RX, "start", RX + 13);
+  }
+
+  // --- Sigma wiring -------------------------------------------------------
+  var client = window.sigmaComputing && window.sigmaComputing.plugin
+    ? window.sigmaComputing.plugin.client : null;
+
+  if (client) {
+    client.config.configureEditorPanel([
+      { name: "source", type: "element" },
+      { name: "source_setting", type: "column", source: "source",
+        allowedTypes: ["text"], label: "Referring setting" },
+      { name: "source_order", type: "column", source: "source",
+        allowedTypes: ["number"], label: "Referring order" },
+      { name: "target_setting", type: "column", source: "source",
+        allowedTypes: ["text"], label: "Receiving setting" },
+      { name: "target_order", type: "column", source: "source",
+        allowedTypes: ["number"], label: "Receiving order" },
+      { name: "referrals", type: "column", source: "source",
+        allowedTypes: ["number"], label: "Referrals (K)" },
+      { name: "leakage", type: "column", source: "source",
+        allowedTypes: ["number"], label: "Out-of-network %" },
+      { name: "days", type: "column", source: "source",
+        allowedTypes: ["number"], label: "Referral-to-appt days" }
+    ]);
+
+    var unsub = null;
+    client.config.subscribe(function (cfg) {
+      if (unsub) { unsub(); unsub = null; }
+      if (!cfg || !cfg.source) { rows = null; draw(); return; }
+      unsub = client.elements.subscribeToElementData(cfg.source, function (d) {
+        try {
+          var g = function (k) { return cfg[k] ? (d[cfg[k]] || []) : []; };
+          var s = g("source_setting"), t = g("target_setting"), r = g("referrals");
+          var so = g("source_order"), to = g("target_order");
+          var lk = g("leakage"), dy = g("days");
+          var n = Math.min(s.length, t.length, r.length);
+          var out = [];
+          for (var i = 0; i < n; i++) {
+            var ref = Number(r[i]);
+            if (!isFinite(ref) || ref <= 0) continue;
+            out.push({
+              src: String(s[i]), tgt: String(t[i]), ref: ref,
+              so: so.length ? Number(so[i]) : i + 1,
+              to: to.length ? Number(to[i]) : i + 1,
+              leak: lk.length && isFinite(Number(lk[i])) ? Number(lk[i]) : 0.2,
+              days: dy.length && isFinite(Number(dy[i])) ? Math.round(Number(dy[i])) : 0
+            });
+          }
+          rows = out;
+        } catch (e) { rows = null; }
+        draw();
+      });
+    });
+  }
+
+  // ResizeObserver on the stage element -- not a window resize listener.
+  if (window.ResizeObserver) new ResizeObserver(draw).observe(stage);
+  draw();   // single paint; no animation loop, so headless PNG export can idle
+})();
+</script>
+</body>
+</html>

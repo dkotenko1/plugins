@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Vintage Delinquency Triangle</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  html,body{margin:0;height:100%;background:#FFFFFF;font-family:Inter,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#16281C;}
+  #wrap{position:relative;width:100%;height:100%;overflow:auto;}
+  svg{display:block;}
+  .rlab{fill:#16281C;font-size:11.5px;font-weight:700;}
+  .rsub{fill:#7C8A80;font-size:9px;font-weight:600;}
+  .clab{fill:#5C6B60;font-size:10px;font-weight:800;letter-spacing:.3px;}
+  .ctop{fill:#9AA79E;font-size:8.5px;font-weight:700;}
+  .cell{stroke:#FFFFFF;stroke-width:2;cursor:pointer;}
+  .empty{fill:#F4F6F4;stroke:#FFFFFF;stroke-width:2;}
+  .cval{font-size:11px;font-weight:800;pointer-events:none;}
+  .axis{fill:#16281C;font-size:11px;font-weight:800;}
+  .peak{fill:none;stroke:#04321A;stroke-width:2;stroke-dasharray:3 2;pointer-events:none;}
+  .avgrow{fill:#EAF6EC;stroke:#CFE6D4;stroke-width:1;}
+  #legend{position:absolute;bottom:8px;right:12px;background:rgba(255,255,255,.95);border:1px solid #D8EBDC;border-radius:10px;padding:8px 11px;font-size:10.5px;line-height:1.55;box-shadow:0 2px 8px rgba(4,50,26,.12);}
+  #legend .hd{font-weight:800;color:#04321A;margin-bottom:3px;font-size:10px;letter-spacing:.4px;}
+  #legend .row{display:flex;align-items:center;gap:6px;}
+  #legend .sw{width:11px;height:11px;border-radius:3px;display:inline-block;}
+  #tip{position:absolute;pointer-events:none;opacity:0;background:#04321A;color:#fff;padding:8px 10px;border-radius:8px;font-size:11px;line-height:1.6;box-shadow:0 4px 14px rgba(0,0,0,.3);transform:translate(-50%,-118%);white-space:nowrap;z-index:5;}
+  #tip b{color:#7CF08A;}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <svg id="svg"></svg>
+  <div id="tip"></div>
+</div>
+<script>
+// LendKey palette
+const GREEN="#00BF00", FOREST="#04321A", MID="#0A7A2E";
+// cumulative 30+ DPD bands — low is good
+const B=[
+  {max:0.75, c:"#1F7A3A", lab:"< 0.75% · outperforming", sh:"< 0.75%"},
+  {max:1.50, c:"#4FA85C", lab:"0.75–1.5% · on plan",     sh:"0.75–1.5%"},
+  {max:2.50, c:"#C9C93A", lab:"1.5–2.5% · watch",        sh:"1.5–2.5%"},
+  {max:4.00, c:"#E8A33D", lab:"2.5–4% · elevated",       sh:"2.5–4%"},
+  {max:1e9,  c:"#D6453C", lab:"> 4% · breach vs. plan",  sh:"> 4%"}
+];
+function bandOf(v){
+  if(v==null||!isFinite(v)) return {c:"#EFF2EF",lab:"Not yet seasoned"};
+  for(const b of B){ if(v<b.max) return b; }
+  return B[B.length-1];
+}
+const fmtP=v=> v==null||!isFinite(v)? "—" : (Math.round(v*100)/100).toFixed(2)+"%";
+const fmtM=v=> v==null||!isFinite(v)? "—" : (Math.abs(v)>=1e9? "$"+(v/1e9).toFixed(2)+"B" : Math.abs(v)>=1e6? "$"+(v/1e6).toFixed(1)+"M" : "$"+Math.round(v/1e3)+"K");
+
+// ---- synthetic fallback so it previews standalone ----
+function synth(){
+  const vintages=["2024 Q1","2024 Q2","2024 Q3","2024 Q4","2025 Q1","2025 Q2","2025 Q3","2025 Q4","2026 Q1","2026 Q2"];
+  const mobs=[3,6,9,12,15,18,21,24];
+  const rows=[]; let s=71;
+  const rnd=()=>{s=(s*9301+49297)%233280;return s/233280;};
+  vintages.forEach((v,vi)=>{
+    const maturity=(vintages.length-vi)*3;          // newest vintages have fewest MOB
+    const credit=0.72+vi*0.09;                      // later vintages underwritten looser
+    let bal=520000000-vi*18000000;
+    mobs.forEach(m=>{
+      if(m>maturity) return;                        // the triangle: leave immature cells empty
+      const curve=3.1*(1-Math.exp(-m/10));          // seasoning curve, flattens out
+      const rate=Math.max(0.05,curve*credit+(rnd()-0.5)*0.34);
+      rows.push({vintage:v,mob:m,rate:rate,balance:bal*(1-m*0.021)});
+    });
+  });
+  return rows;
+}
+
+let DATA=synth();
+
+function draw(){
+  const wrap=document.getElementById("wrap");
+  const svg=document.getElementById("svg");
+  const recs=DATA.filter(d=>d&&d.vintage!=null&&d.mob!=null);
+  if(!recs.length){svg.innerHTML="";return;}
+  const rlist=[], mset=[];
+  for(const d of recs){ if(!rlist.includes(d.vintage)) rlist.push(d.vintage); if(!mset.includes(+d.mob)) mset.push(+d.mob); }
+  mset.sort((a,b)=>a-b);
+  const lookup={}, blook={};
+  for(const d of recs){ lookup[d.vintage+"||"+d.mob]=d.rate; if(d.balance!=null) blook[d.vintage+"||"+d.mob]=d.balance; }
+
+  const availW=(wrap.clientWidth||900);
+  const mL=132, mT=54, mR=16, mB=68;
+  const colW=Math.max(58,Math.min(104,Math.floor((availW-mL-mR)/Math.max(1,mset.length))));
+  const rowH=Math.max(26,Math.min(38,Math.floor(((wrap.clientHeight||440)-mT-mB)/Math.max(1,rlist.length+1))));
+  const W=mL+mset.length*colW+mR;
+  const H=mT+(rlist.length+1)*rowH+mB;
+  svg.setAttribute("width",W); svg.setAttribute("height",H);
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  let g="";
+
+  // axis captions
+  g+=`<text class="axis" x="${mL}" y="18" text-anchor="start">Months on book →</text>`;
+  g+=`<text class="axis" x="8" y="18" text-anchor="start">Vintage ↓</text>`;
+  // column headers
+  mset.forEach((m,ci)=>{
+    const x=mL+ci*colW+colW/2;
+    g+=`<text class="clab" x="${x}" y="${mT-14}" text-anchor="middle">MOB ${m}</text>`;
+  });
+
+  // rows + peak-band tracing
+  const colSum={}, colCnt={};
+  rlist.forEach((r,ri)=>{
+    const y=mT+ri*rowH;
+    const cells=mset.filter(m=>lookup[r+"||"+m]!=null);
+    const last=cells.length? cells[cells.length-1] : null;
+    g+=`<text class="rlab" x="${mL-12}" y="${y+rowH/2+1}" text-anchor="end">${esc(clip(r,16))}</text>`;
+    g+=`<text class="rsub" x="${mL-12}" y="${y+rowH/2+12}" text-anchor="end">${last!=null? fmtP(lookup[r+"||"+last])+" @ MOB "+last : "new"}</text>`;
+    mset.forEach((m,ci)=>{
+      const x=mL+ci*colW;
+      const v=lookup[r+"||"+m];
+      if(v==null){
+        g+=`<rect class="empty" x="${x+2}" y="${y+2}" width="${colW-4}" height="${rowH-4}" rx="5"/>`;
+        return;
+      }
+      colSum[m]=(colSum[m]||0)+v; colCnt[m]=(colCnt[m]||0)+1;
+      const b=bandOf(v);
+      g+=`<rect class="cell" x="${x+2}" y="${y+2}" width="${colW-4}" height="${rowH-4}" rx="5" fill="${b.c}"`+
+         ` data-r="${enc(r)}" data-m="${m}" data-v="${v}" data-b="${blook[r+"||"+m]!=null?blook[r+"||"+m]:""}" data-l="${enc(b.lab)}"/>`;
+      g+=`<text class="cval" x="${x+colW/2}" y="${y+rowH/2+4}" text-anchor="middle" fill="#FFFFFF">${fmtP(v)}</text>`;
+    });
+    // trace the seasoning frontier (last observed MOB per vintage)
+    if(last!=null){
+      const ci=mset.indexOf(last);
+      const x=mL+(ci+1)*colW;
+      g+=`<path class="peak" d="M ${x-1} ${y+2} L ${x-1} ${y+rowH-2}"/>`;
+    }
+  });
+
+  // portfolio-average footer row
+  const ay=mT+rlist.length*rowH;
+  g+=`<rect class="avgrow" x="${mL+2}" y="${ay+3}" width="${mset.length*colW-4}" height="${rowH-6}" rx="5"/>`;
+  g+=`<text class="rlab" x="${mL-12}" y="${ay+rowH/2+4}" text-anchor="end">All vintages</text>`;
+  mset.forEach((m,ci)=>{
+    const x=mL+ci*colW; const n=colCnt[m]||0;
+    const av=n? colSum[m]/n : null;
+    g+=`<text class="cval" x="${x+colW/2}" y="${ay+rowH/2+4}" text-anchor="middle" fill="${av==null?"#B6C0B8":"#16281C"}">${fmtP(av)}</text>`;
+  });
+  g+=`<text class="ctop" x="${mL-12}" y="${ay+rowH+17}" text-anchor="end">CUM. 30+ DPD</text>`;
+  // inline horizontal legend — keeps clear of the grid at every width
+  const items=B.concat([{c:"#EFF2EF",lab:"Not yet seasoned",sh:"unseasoned"}]);
+  const legW=Math.floor((mset.length*colW)/items.length);
+  const legShort=legW<128;
+  items.forEach((b,i)=>{
+    const x=mL+i*legW;
+    g+=`<rect x="${x}" y="${ay+rowH+8}" width="11" height="11" rx="3" fill="${b.c}" stroke="#DDE4DE"/>`;
+    g+=`<text class="ctop" x="${x+16}" y="${ay+rowH+17}" text-anchor="start">${esc(legShort?b.sh:b.lab)}</text>`;
+  });
+  g+=`<text class="ctop" x="${mL-12}" y="${ay+rowH+35}" text-anchor="end">READ AS</text>`;
+  g+=`<text class="ctop" x="${mL}" y="${ay+rowH+35}" text-anchor="start">Cumulative 30+ days-past-due balance as a % of original vintage balance · each row seasons left → right</text>`;
+
+  svg.innerHTML=g;
+
+  const tip=document.getElementById("tip");
+  svg.querySelectorAll(".cell").forEach(el=>{
+    el.addEventListener("mousemove",e=>{
+      const rc=wrap.getBoundingClientRect();
+      tip.style.left=(e.clientX-rc.left+wrap.scrollLeft)+"px";
+      tip.style.top=(e.clientY-rc.top+wrap.scrollTop)+"px"; tip.style.opacity=1;
+      const bal=el.dataset.b===""?null:+el.dataset.b;
+      tip.innerHTML=`<b>${dec(el.dataset.r)} vintage</b> · MOB ${el.dataset.m}<br>`+
+        `Cum. 30+ DPD: ${fmtP(+el.dataset.v)}<br>`+
+        (bal!=null? `Balance outstanding: ${fmtM(bal)}<br>`:"")+
+        `${dec(el.dataset.l)}`;
+      el.setAttribute("stroke",FOREST);
+    });
+    el.addEventListener("mouseleave",()=>{tip.style.opacity=0;el.setAttribute("stroke","#FFFFFF");});
+  });
+}
+function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function clip(s,n){s=String(s);return s.length>n?s.slice(0,n-1)+"…":s;}
+function enc(s){return encodeURIComponent(String(s));}
+function dec(s){return decodeURIComponent(s);}
+
+// ---- Sigma wiring ----
+var client=(window.sigmaComputing&&window.sigmaComputing.plugin&&window.sigmaComputing.plugin.client)||null;
+var st={cfg:{},data:null,unsub:null};
+function recompute(){
+  var c=st.cfg||{};
+  if(st.data && c.vintage && st.data[c.vintage] && c.mob && st.data[c.mob] && c.rate && st.data[c.rate]){
+    var R=st.data[c.vintage]||[], M=st.data[c.mob]||[], V=st.data[c.rate]||[];
+    var BAL=(c.balance && st.data[c.balance])? st.data[c.balance] : null;
+    var n=Math.min(R.length,M.length,V.length), rows=[];
+    for(var i=0;i<n;i++) rows.push({
+      vintage:R[i]!=null?String(R[i]):"",
+      mob:M[i]!=null?Number(M[i]):null,
+      rate:V[i]!=null?Number(V[i]):null,
+      balance:(BAL&&BAL[i]!=null)?Number(BAL[i]):null
+    });
+    rows=rows.filter(function(d){return d.vintage!==""&&d.mob!=null;});
+    if(rows.length){ DATA=rows; draw(); return; }
+  }
+  DATA=synth(); draw();
+}
+if(client){
+  client.config.configureEditorPanel([
+    {name:"source", type:"element"},
+    {name:"vintage", type:"column", source:"source", label:"Origination vintage (rows)"},
+    {name:"mob", type:"column", source:"source", allowedTypes:["number","integer"], label:"Months on book (columns)"},
+    {name:"rate", type:"column", source:"source", allowedTypes:["number","integer"], label:"Cumulative 30+ DPD %"},
+    {name:"balance", type:"column", source:"source", allowedTypes:["number","integer"], label:"Balance outstanding (optional)"}
+  ]);
+  client.config.subscribe(function(cfg){
+    st.cfg=cfg||{};
+    if(st.unsub){st.unsub();st.unsub=null;}
+    if(cfg&&cfg.source){ st.unsub=client.elements.subscribeToElementData(cfg.source,function(d){st.data=d;recompute();}); }
+    recompute();
+  });
+} else { recompute(); }
+
+new ResizeObserver(function(){draw();}).observe(document.getElementById("wrap"));
+window.addEventListener("resize",draw);
+draw();
+</script>
+</body>
+</html>

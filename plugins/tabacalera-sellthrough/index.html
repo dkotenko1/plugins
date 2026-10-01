@@ -1,0 +1,165 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Sell-in vs Sell-through</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin@latest/dist/index.js"></script>
+<style>
+  :root{
+    --oxblood:#400a17; --wine:#5A0E20; --gold:#e0a519; --ltgold:#ebcd6c; --dkgold:#c99416;
+    --cream:#efe6d7; --ink:#24272b; --slate:#8b8178; --red:#b0202f; --green:#2f8f5b;
+  }
+  *{box-sizing:border-box;font-family:'Open Sans','Segoe UI',Inter,Arial,sans-serif;}
+  html,body{margin:0;padding:0;height:100%;background:transparent;color:var(--ink);}
+  #wrap{padding:10px 12px 14px;height:100%;overflow:auto;}
+  .hdr{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:8px;flex-wrap:wrap;}
+  .hdr .t{font-size:13px;font-weight:700;color:var(--oxblood);}
+  .stats{display:flex;gap:16px;}
+  .stat{text-align:right;} .stat .v{font-size:15px;font-weight:800;color:var(--oxblood);}
+  .stat .l{font-size:9.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--slate);}
+  .legend{display:flex;gap:14px;font-size:10px;color:var(--slate);margin-bottom:6px;align-items:center;}
+  .lg{display:flex;gap:5px;align-items:center;}
+  .sw{width:14px;height:10px;border-radius:2px;}
+  .row{display:grid;grid-template-columns:150px 1fr 92px;align-items:center;gap:10px;margin:5px 0;}
+  .nm{font-size:11.5px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .nm .sub{font-size:9px;color:var(--slate);font-weight:400;}
+  .track{position:relative;height:26px;background:#f0e7da;border:1px solid #e2d5c2;border-radius:5px;overflow:hidden;}
+  .sin{position:absolute;top:0;left:0;height:100%;background:repeating-linear-gradient(45deg,#dcc7ac,#dcc7ac 5px,#d3bd9c 5px,#d3bd9c 10px);}
+  .sthr{position:absolute;top:0;left:0;height:100%;border-radius:4px;}
+  .rate{font-size:12px;font-weight:800;text-align:right;}
+  .badge{display:inline-block;font-size:8.5px;font-weight:700;padding:1px 6px;border-radius:9px;margin-left:5px;vertical-align:middle;}
+  .cap{font-size:9.5px;color:var(--slate);margin-top:9px;line-height:1.35;}
+  .cap b{color:var(--oxblood);}
+</style>
+</head>
+<body>
+<div id="wrap"><div id="root"></div></div>
+<script>
+(function(){
+  const c = (window.SigmaComputing && window.SigmaComputing.client) ||
+            (window.sigmaComputing && window.sigmaComputing.client) || null;
+
+  // ---- editor panel config ----
+  try{
+    if(c && c.config && c.config.configureEditorPanel){
+      c.config.configureEditorPanel([
+        {name:"source", type:"element"},
+        {name:"label", type:"column", source:"source", allowMultiple:false},
+        {name:"sellIn", type:"column", source:"source", allowMultiple:false},
+        {name:"sellThrough", type:"column", source:"source", allowMultiple:false}
+      ]);
+    }
+  }catch(e){}
+
+  const fmtK = n => n>=1000 ? (n/1000).toFixed(n>=100000?0:1)+"K" : Math.round(n).toString();
+  const chan = nm => {
+    const s=(nm||"").toLowerCase();
+    if(s.includes("casa")||s.includes("lounge")||s.includes("retail")) return "Owned Retail";
+    if(s.includes("jr")||s.includes("cigars.com")||s.includes("serious")||s.includes("online")||s.includes("e-com")) return "E-commerce";
+    return "Wholesale";
+  };
+
+  // synthetic fallback (top wholesale accounts + owned/e-com) so it previews standalone
+  const FALLBACK = [
+    {label:"Ashton's Fine Cigars — TX",      sellIn:48200, sellThrough:31300},
+    {label:"Casa de Montecristo (Owned) — FL",sellIn:36100, sellThrough:34400},
+    {label:"Corona Cigar Co. — FL",          sellIn:41500, sellThrough:24900},
+    {label:"JR Cigar (E-commerce)",          sellIn:72800, sellThrough:69100},
+    {label:"Federal Cigar — NH",             sellIn:22600, sellThrough:12100},
+    {label:"Cigars.com (E-commerce)",        sellIn:39400, sellThrough:35800},
+    {label:"Tinder Box — GA",                sellIn:18900, sellThrough:13600},
+    {label:"Famous Smoke — PA",              sellIn:55300, sellThrough:41200},
+    {label:"Casa de Montecristo (Owned) — NY",sellIn:29700, sellThrough:27900},
+    {label:"Old Virginia Tobacco — VA",      sellIn:20400, sellThrough:9800}
+  ];
+
+  let ro=null;
+  function draw(rows){
+    const root=document.getElementById("root"); if(!root) return;
+    if(!rows||!rows.length) rows=FALLBACK.slice();
+    // sell-through rate
+    rows.forEach(r=>{ r.rate = r.sellIn>0 ? r.sellThrough/r.sellIn : 0; });
+    const maxIn = Math.max.apply(null, rows.map(r=>r.sellIn), 1);
+    const totIn = rows.reduce((a,r)=>a+r.sellIn,0);
+    const totThr= rows.reduce((a,r)=>a+r.sellThrough,0);
+    const blended = totIn>0 ? totThr/totIn : 0;
+    const gapU = totIn-totThr;
+    // sort worst sell-through first (biggest opportunity/aging risk)
+    rows.sort((a,b)=>a.rate-b.rate);
+
+    const rateColor = r => r<0.60 ? "var(--red)" : (r<0.85 ? "var(--dkgold)" : "var(--green)");
+    const sthrFill  = r => r<0.60
+        ? "linear-gradient(90deg,#8a1420,#b0202f)"
+        : (r<0.85 ? "linear-gradient(90deg,#9A6410,#e0a519)" : "linear-gradient(90deg,#1f7a4c,#2f8f5b)");
+    const badge = r => r<0.60
+        ? '<span class="badge" style="background:#f6dcdf;color:#b0202f;">AT RISK</span>'
+        : (r<0.85 ? '<span class="badge" style="background:#f7ecd0;color:#9A6410;">WATCH</span>'
+                  : '<span class="badge" style="background:#dcefe4;color:#2f8f5b;">HEALTHY</span>');
+
+    let html=''
+      +'<div class="hdr"><div class="t">Sell-in vs. Sell-through by account &amp; channel</div>'
+      +'<div class="stats">'
+        +'<div class="stat"><div class="v">'+fmtK(totIn)+'</div><div class="l">Units Shipped In</div></div>'
+        +'<div class="stat"><div class="v">'+fmtK(totThr)+'</div><div class="l">Units Sold Through</div></div>'
+        +'<div class="stat"><div class="v" style="color:'+rateColor(blended)+'">'+(blended*100).toFixed(0)+'%</div><div class="l">Blended Sell-through</div></div>'
+        +'<div class="stat"><div class="v">'+fmtK(gapU)+'</div><div class="l">Units In Channel</div></div>'
+      +'</div></div>'
+      +'<div class="legend">'
+        +'<div class="lg"><span class="sw" style="background:repeating-linear-gradient(45deg,#dcc7ac,#dcc7ac 4px,#d3bd9c 4px,#d3bd9c 8px);"></span>Sell-in (shipped)</div>'
+        +'<div class="lg"><span class="sw" style="background:linear-gradient(90deg,#9A6410,#e0a519);"></span>Sell-through (sold)</div>'
+        +'<div class="lg" style="margin-left:auto;">Sorted by sell-through rate — lowest first</div>'
+      +'</div>';
+
+    rows.forEach(r=>{
+      const inW = (r.sellIn/maxIn*100);
+      const thrW= (r.sellThrough/maxIn*100);
+      html+=''
+      +'<div class="row">'
+        +'<div class="nm">'+r.label+'<div class="sub">'+chan(r.label)+' · gap '+fmtK(r.sellIn-r.sellThrough)+' u</div></div>'
+        +'<div class="track">'
+          +'<div class="sin" style="width:'+inW.toFixed(1)+'%"></div>'
+          +'<div class="sthr" style="width:'+thrW.toFixed(1)+'%;background:'+sthrFill(r.rate)+'"></div>'
+        +'</div>'
+        +'<div class="rate" style="color:'+rateColor(r.rate)+'">'+(r.rate*100).toFixed(0)+'%'+badge(r.rate)+'</div>'
+      +'</div>';
+    });
+
+    html+='<div class="cap"><b>Sell-through rate</b> = units sold to consumers ÷ units shipped into the account. '
+        +'Low rates flag <b>aging inventory &amp; over-shipment</b> (a markdown / reallocation candidate); the channel gap is working capital sitting in humidors downstream.</div>';
+    root.innerHTML=html;
+  }
+
+  function fromSigma(){
+    try{
+      const cfg=c.config.get();
+      const el=cfg.source;
+      const cols=c.elementColumns.get(el)||{};
+      const data=c.elementData.get(el)||{};
+      const idOf=k=> Array.isArray(cfg[k])?cfg[k][0]:cfg[k];
+      const L=idOf("label"), SI=idOf("sellIn"), ST=idOf("sellThrough");
+      if(!L||!SI||!ST||!data[L]) { draw(null); return; }
+      const n=data[L].length; const rows=[];
+      for(let i=0;i<n;i++){
+        rows.push({label:String(data[L][i]), sellIn:Number(data[SI][i])||0, sellThrough:Number(data[ST][i])||0});
+      }
+      draw(rows);
+    }catch(e){ draw(null); }
+  }
+
+  if(c && c.config && c.config.subscribe){
+    c.config.subscribe(fromSigma);
+    ["source","label","sellIn","sellThrough"].forEach(k=>{ try{c.elementData && c.elementData.subscribe && 0;}catch(e){} });
+  } else {
+    draw(null); // standalone preview
+  }
+
+  // ResizeObserver — redraw on panel resize (Sigma sizes AFTER first paint)
+  try{
+    ro=new ResizeObserver(()=>{ if(c&&c.config&&c.config.get){fromSigma();} else {draw(null);} });
+    ro.observe(document.getElementById("wrap"));
+  }catch(e){ window.addEventListener("resize",()=>{ if(c&&c.config&&c.config.get){fromSigma();} else {draw(null);} }); }
+})();
+</script>
+</body>
+</html>

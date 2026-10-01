@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Case Volume &amp; Value-Unit Scoring Grid</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  :root{
+    --navy:#0D3F3C; --teal:#0F8577; --mint:#4FD8B8; --amber:#E1A32D;
+    --red:#EF4444; --ink:#0D3F3C; --muted:#5B7A76; --line:#DCEBE8;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:transparent;
+    font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+    color:var(--ink);-webkit-font-smoothing:antialiased}
+  #stage{padding:2px 4px 6px;overflow:auto}
+  table.grid{border-collapse:collapse;width:100%;table-layout:fixed}
+  .grid th, .grid td{border:1px solid var(--line);padding:0}
+  .grid th{background:#F2F9F7;font-size:9.5px;font-weight:800;letter-spacing:.3px;
+    text-transform:uppercase;color:var(--muted);padding:6px 4px;text-align:center;
+    white-space:normal;word-break:break-word;line-height:1.15}
+  .corner{background:#F2F9F7}
+  .rowhead{font-size:10.5px;font-weight:700;color:var(--ink);padding:6px 8px !important;
+    text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    background:#FBFEFD}
+  .cell{position:relative;height:46px;text-align:center;vertical-align:middle}
+  .cell .wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;
+    height:100%;gap:1px}
+  .cell .score{font-size:12px;font-weight:800;font-variant-numeric:tabular-nums}
+  .cell .vol{font-size:8.5px;color:rgba(13,63,60,.62);font-weight:600}
+  .cell .flag{position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;
+    background:var(--red)}
+  .legend{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    padding:2px 4px 8px;font-size:10px;color:var(--muted);font-weight:600}
+  .legend b{font-weight:700;color:var(--ink)}
+  .lg{display:inline-flex;align-items:center;gap:5px}
+  .sw{width:20px;height:8px;border-radius:2px;display:inline-block}
+  .grad{background:linear-gradient(90deg,#FBEAEA,#FDF4E1,#D9F2EC,var(--teal))}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--red);display:inline-block}
+  .empty{padding:22px;text-align:center;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="legend" id="legend"></div>
+  <div id="gridwrap"></div>
+</div>
+<script>
+(function(){
+  "use strict";
+
+  // ---- synthetic fallback: 10 LINQ network partner health systems x 6
+  // therapeutic areas, mirrors the bound contract exactly so the plugin reads
+  // correctly unbound (editor panel, config handshake, headless PNG export).
+  function synth(){
+    var partners = ["Mount Sinai Health System","Ochsner Health","Allegheny Health Network",
+      "Intermountain Health","Tampa General Hospital","MedStar Health",
+      "Rush University System for Health","UC San Diego Health",
+      "Baptist Health South Florida","Northwell Health"];
+    var areas = ["Oncology","Cardiometabolic & Endocrinology","Rare Disease",
+      "Immunology & Rheumatology","Neurology","Infectious Disease"];
+    var baseVol  = [580,410,190,300,260,170];
+    var baseScr  = [0.86,0.91,0.74,0.88,0.79,0.93];
+    var baseSla  = [0.041,0.028,0.086,0.033,0.061,0.019];
+    var rows = [];
+    for (var p=0;p<partners.length;p++){
+      for (var a=0;a<areas.length;a++){
+        var seed = (partners[p].length*7 + a*13 + p*3) % 23;
+        var tilt = (seed - 11) / 100;
+        rows.push({
+          partner: partners[p],
+          area: areas[a],
+          volume: Math.max(20, Math.round(baseVol[a]*(1+tilt)*(0.55+0.09*((p%5))))),
+          score: Math.max(0.35, Math.min(0.99, baseScr[a] + tilt*0.6)),
+          sla: Math.max(0.005, baseSla[a] + tilt*0.02)
+        });
+      }
+    }
+    return rows;
+  }
+
+  function esc(s){
+    return String(s == null ? "" : s)
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+      .replace(/"/g,"&quot;");
+  }
+
+  // Diverging red -> amber -> teal scale on the RVU/DVU score, 0..1.
+  function scoreColor(s){
+    if (s == null || !isFinite(s)) return "#F5F8F7";
+    var stops = [
+      {p:0.0,  c:[253,236,236]},
+      {p:0.45, c:[253,244,225]},
+      {p:0.7,  c:[217,242,236]},
+      {p:1.0,  c:[15,133,119]}
+    ];
+    var x = Math.max(0, Math.min(1, s));
+    for (var i=0;i<stops.length-1;i++){
+      var a = stops[i], b = stops[i+1];
+      if (x >= a.p && x <= b.p){
+        var t = (b.p===a.p) ? 0 : (x-a.p)/(b.p-a.p);
+        var r = Math.round(a.c[0]+(b.c[0]-a.c[0])*t);
+        var g = Math.round(a.c[1]+(b.c[1]-a.c[1])*t);
+        var bl = Math.round(a.c[2]+(b.c[2]-a.c[2])*t);
+        return "rgb("+r+","+g+","+bl+")";
+      }
+    }
+    return "rgb(15,133,119)";
+  }
+
+  function textOn(s){
+    return (s != null && s >= 0.7) ? "#FFFFFF" : "#0D3F3C";
+  }
+
+  function render(rows){
+    var wrap = document.getElementById("gridwrap");
+    var legend = document.getElementById("legend");
+
+    if (!rows || !rows.length){
+      wrap.innerHTML = '<div class="empty">No case-scoring rows to display.</div>';
+      legend.innerHTML = "";
+      return;
+    }
+
+    var partners = [], areas = [];
+    var byKey = {};
+    rows.forEach(function(r){
+      if (partners.indexOf(r.partner) === -1) partners.push(r.partner);
+      if (areas.indexOf(r.area) === -1) areas.push(r.area);
+      byKey[r.partner + "||" + r.area] = r;
+    });
+
+    // Rank partners by total case volume, highest first, so the most active
+    // LINQ network partners sit at the top of the grid.
+    var totals = {};
+    partners.forEach(function(p){ totals[p] = 0; });
+    rows.forEach(function(r){ totals[r.partner] += (r.volume||0); });
+    partners.sort(function(a,b){ return totals[b]-totals[a]; });
+
+    legend.innerHTML =
+      '<span class="lg"><b>RVU/DVU score</b> <span class="sw grad"></span> low &rarr; high</span>' +
+      '<span class="lg"><span class="dot"></span> SLA breach rate &gt; 6%</span>' +
+      '<span class="lg" style="margin-left:auto">Case volume shown per cell</span>';
+
+    var html = '<table class="grid"><colgroup><col style="width:172px">';
+    areas.forEach(function(){ html += '<col>'; });
+    html += '</colgroup><thead><tr><th class="corner"></th>';
+    areas.forEach(function(a){ html += '<th>'+esc(a)+'</th>'; });
+    html += '</tr></thead><tbody>';
+
+    partners.forEach(function(p){
+      html += '<tr><td class="rowhead" title="'+esc(p)+'">'+esc(p)+'</td>';
+      areas.forEach(function(a){
+        var d = byKey[p+"||"+a];
+        if (!d){
+          html += '<td class="cell"></td>';
+        } else {
+          var bg = scoreColor(d.score);
+          var fg = textOn(d.score);
+          var flag = (d.sla != null && d.sla > 0.06)
+            ? '<span class="flag" title="SLA breach rate '+(d.sla*100).toFixed(1)+'%"></span>' : '';
+          html += '<td class="cell" style="background:'+bg+'" ' +
+            'title="'+esc(p)+' × '+esc(a)+': score '+(d.score!=null?(d.score*100).toFixed(0)+'%':'—')+
+            ', '+(d.volume!=null?d.volume.toLocaleString():'—')+' cases, SLA breach '+
+            (d.sla!=null?(d.sla*100).toFixed(1)+'%':'—')+'">' + flag +
+            '<div class="wrap">' +
+              '<div class="score" style="color:'+fg+'">' + (d.score!=null?(d.score*100).toFixed(0)+'%':'—') + '</div>' +
+              '<div class="vol" style="color:'+fg+';opacity:.85">' + (d.volume!=null?d.volume.toLocaleString():'—') + ' cases</div>' +
+            '</div>' +
+          '</td>';
+        }
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+  }
+
+  var current = synth();
+
+  var redraw = function(){ render(current); };
+  if (window.ResizeObserver){
+    new ResizeObserver(redraw).observe(document.getElementById("stage"));
+  }
+  window.addEventListener("resize", redraw);
+  window.addEventListener("load", function(){ requestAnimationFrame(redraw); });
+  requestAnimationFrame(redraw);
+
+  // ---------------- Sigma wiring ----------------
+  var client = (window.sigmaComputing && window.sigmaComputing.plugin)
+    ? window.sigmaComputing.plugin.client : null;
+
+  if (!client){ render(current); return; }
+
+  client.config.configureEditorPanel([
+    {name:"source",  type:"element"},
+    {name:"partner", type:"column", source:"source", allowedTypes:["text"],   label:"Partner health system"},
+    {name:"area",    type:"column", source:"source", allowedTypes:["text"],   label:"Therapeutic area"},
+    {name:"volume",  type:"column", source:"source", allowedTypes:["number"], label:"Case volume"},
+    {name:"score",   type:"column", source:"source", allowedTypes:["number"], label:"RVU/DVU score (0-1 or 0-100)"},
+    {name:"sla",     type:"column", source:"source", allowedTypes:["number"], label:"SLA breach rate (0-1 or 0-100)"}
+  ]);
+
+  function col(data, cfg, key){
+    var id = cfg[key];
+    return (id && data && data[id]) ? data[id] : null;
+  }
+
+  function toRows(data, cfg){
+    var p = col(data, cfg, "partner");
+    if (!p || !p.length) return null;
+    var a = col(data, cfg, "area"), v = col(data, cfg, "volume"),
+        s = col(data, cfg, "score"), sl = col(data, cfg, "sla");
+    var out = [];
+    for (var i=0;i<p.length;i++){
+      var sv = s ? Number(s[i]) : null;
+      if (sv != null && sv > 1.5) sv = sv/100;
+      var slv = sl ? Number(sl[i]) : null;
+      if (slv != null && slv > 1.5) slv = slv/100;
+      out.push({
+        partner: p[i],
+        area: a ? a[i] : "",
+        volume: v ? Number(v[i]) : null,
+        score: (sv != null && isFinite(sv)) ? sv : null,
+        sla: (slv != null && isFinite(slv)) ? slv : null
+      });
+    }
+    return out;
+  }
+
+  var unsub = null;
+  client.config.subscribe(function(cfg){
+    if (unsub){ try{ unsub(); }catch(e){} unsub = null; }
+    if (!cfg || !cfg.source){ current = synth(); render(current); return; }
+    unsub = client.elements.subscribeToElementData(cfg.source, function(data){
+      var rows = toRows(data, cfg);
+      current = (rows && rows.length) ? rows : synth();
+      render(current);
+    });
+  });
+
+  render(current);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Site Power & Capacity Utilization Grid</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:transparent;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:#E8EEF5;-webkit-font-smoothing:antialiased}
+  #stage{position:relative;width:100%;height:100%;overflow:hidden}
+  #grid{position:absolute;inset:0;display:grid;gap:6px;padding:6px;box-sizing:border-box;
+    grid-auto-rows:1fr;overflow:hidden}
+  .card{position:relative;border-radius:8px;padding:9px 11px;display:flex;
+    flex-direction:column;justify-content:space-between;overflow:hidden;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.14);cursor:default;
+    transition:transform .1s ease}
+  .card:hover{transform:translateY(-1px)}
+  .site{font-size:11px;font-weight:700;color:#fff;line-height:1.2;
+    text-shadow:0 1px 2px rgba(0,0,0,.3)}
+  .state{font-size:9px;font-weight:600;color:rgba(255,255,255,.75);
+    letter-spacing:.06em;text-transform:uppercase}
+  .bars{margin-top:6px}
+  .barrow{display:flex;align-items:center;gap:5px;margin-top:3px}
+  .barlbl{font-size:7.5px;font-weight:700;color:rgba(255,255,255,.72);
+    letter-spacing:.04em;text-transform:uppercase;width:30px;flex:none}
+  .bartrack{flex:1;height:5px;border-radius:3px;background:rgba(0,0,0,.28);overflow:hidden}
+  .barfill{height:100%;border-radius:3px}
+  .barval{font-size:8.5px;font-weight:700;color:#fff;width:34px;text-align:right;flex:none}
+  .foot{display:flex;justify-content:space-between;align-items:baseline;margin-top:7px}
+  .util{font-size:19px;font-weight:800;color:#fff}
+  .utillbl{font-size:7.5px;font-weight:700;color:rgba(255,255,255,.75);
+    letter-spacing:.05em;text-transform:uppercase}
+  .status{font-size:8px;font-weight:700;padding:2px 6px;border-radius:9px;
+    text-transform:uppercase;letter-spacing:.03em}
+  #tip{position:absolute;pointer-events:none;opacity:0;transition:opacity .1s ease;
+    background:#081420;color:#fff;border-radius:6px;padding:7px 9px;font-size:10.5px;
+    line-height:1.5;box-shadow:0 6px 18px rgba(8,20,32,.4);max-width:230px;z-index:5}
+  #tip b{font-weight:700}
+  #tip .k{color:#8FB4FF;font-weight:600}
+  #legend{position:absolute;left:10px;bottom:6px;display:flex;align-items:center;
+    gap:6px;font-size:9px;font-weight:600;color:rgba(232,238,245,.65);letter-spacing:.05em;z-index:3}
+  #legend .bar{width:88px;height:6px;border-radius:4px;
+    background:linear-gradient(90deg,#0B2412 0%,#0075A8 45%,#3498DB 75%,#9AE000 100%)}
+  #empty{position:absolute;inset:0;display:none;align-items:center;
+    justify-content:center;font-size:11px;color:rgba(232,238,245,.6)}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="grid"></div>
+  <div id="legend"><span>LOW UTIL.</span><span class="bar"></span><span>ENERGIZED &amp; FULL</span></div>
+  <div id="tip"></div>
+  <div id="empty">No site capacity data to display</div>
+</div>
+<script>
+(function () {
+  var stage = document.getElementById("stage");
+  var grid  = document.getElementById("grid");
+  var tip   = document.getElementById("tip");
+  var emptyEl = document.getElementById("empty");
+  var rows = null;
+
+  // Utilization colour scale: deep navy (cold/undeveloped) -> blue -> bright
+  // blue -> electric green (fully energized & near-full utilization). Matches
+  // Core Scientific's own logo palette (#003970 / #0075A8 / #3498DB) plus the
+  // brand's amber/green accent for "hot" (fully live) capacity.
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function mix(c1, c2, t) {
+    return "rgb(" + Math.round(lerp(c1[0], c2[0], t)) + "," +
+                    Math.round(lerp(c1[1], c2[1], t)) + "," +
+                    Math.round(lerp(c1[2], c2[2], t)) + ")";
+  }
+  var COLD = [11, 36, 18], MID = [0, 117, 168], HOT = [52, 152, 219], PEAK = [154, 224, 0];
+  function utilColor(pct) {
+    var t = Math.max(0, Math.min(1, pct / 100));
+    if (t < 0.5) return mix(COLD, MID, t / 0.5);
+    if (t < 0.85) return mix(MID, HOT, (t - 0.5) / 0.35);
+    return mix(HOT, PEAK, (t - 0.85) / 0.15);
+  }
+  function statusColor(s) {
+    s = (s || "").toLowerCase();
+    if (s.indexOf("ahead") >= 0 || s.indexOf("energiz") >= 0) return "rgba(154,224,0,.85)";
+    if (s.indexOf("behind") >= 0 || s.indexOf("delay") >= 0) return "rgba(214,54,90,.85)";
+    return "rgba(255,255,255,.2)";
+  }
+
+  function clip(t, n) { return t.length <= n ? t : t.slice(0, n - 1) + "…"; }
+
+  // --- fallback so the plugin looks right before it is bound to data
+  function synth() {
+    var sites = [
+      ["Denton", "TX", 285, 262, 92, "Energizing"],
+      ["Muskogee", "OK", 120, 118, 98, "Ahead of schedule"],
+      ["Marble", "NC", 75, 58, 77, "On plan"],
+      ["Grand Forks", "ND", 60, 41, 68, "On plan"],
+      ["Austin", "TX", 40, 22, 55, "Behind"],
+      ["Cottonwood", "AZ", 30, 19, 63, "On plan"]
+    ];
+    return sites.map(function (b) {
+      return { site: b[0], state: b[1], contracted: b[2], energized: b[3],
+               util: b[4], status: b[5] };
+    });
+  }
+
+  function fmtMW(v) { return Math.round(v).toLocaleString() + " MW"; }
+
+  function draw() {
+    var data = rows && rows.length ? rows : synth();
+    emptyEl.style.display = (data && data.length) ? "none" : "flex";
+    grid.innerHTML = "";
+    if (!data || !data.length) return;
+
+    var n = data.length;
+    var cols = Math.max(2, Math.min(6, Math.ceil(Math.sqrt(n * 1.5))));
+    var rowsN = Math.ceil(n / cols);
+    grid.style.gridTemplateColumns = "repeat(" + cols + ", 1fr)";
+    grid.style.gridTemplateRows = "repeat(" + rowsN + ", 1fr)";
+
+    var sorted = data.slice().sort(function (a, b) { return b.contracted - a.contracted; });
+    var maxMW = Math.max.apply(null, sorted.map(function (d) { return d.contracted; })) || 1;
+
+    sorted.forEach(function (d) {
+      var col = utilColor(d.util);
+      var card = document.createElement("div");
+      card.className = "card";
+      card.style.background =
+        "linear-gradient(135deg," + col + " 0%, rgba(6,20,10,.78) 100%)";
+      var contractedPct = Math.min(100, (d.contracted / maxMW) * 100);
+      var energizedPct = Math.min(100, (d.energized / maxMW) * 100);
+      card.innerHTML =
+        '<div><div class="site">' + clip(d.site, 20) + '</div>' +
+        '<div class="state">' + d.state + '</div>' +
+        '<div class="bars">' +
+          '<div class="barrow"><span class="barlbl">Contr.</span>' +
+            '<div class="bartrack"><div class="barfill" style="width:' + contractedPct +
+            '%;background:rgba(255,255,255,.55)"></div></div>' +
+            '<span class="barval">' + Math.round(d.contracted) + '</span></div>' +
+          '<div class="barrow"><span class="barlbl">Energ.</span>' +
+            '<div class="bartrack"><div class="barfill" style="width:' + energizedPct +
+            '%;background:#9AE000"></div></div>' +
+            '<span class="barval">' + Math.round(d.energized) + '</span></div>' +
+        '</div></div>' +
+        '<div class="foot">' +
+          '<div><div class="util">' + Math.round(d.util) + '%</div>' +
+          '<div class="utillbl">Utilized</div></div>' +
+          '<div class="status" style="background:' + statusColor(d.status) + '">' +
+            clip(d.status, 14) + '</div>' +
+        '</div>';
+      card.addEventListener("mouseenter", function (ev) {
+        tip.innerHTML = "<b>" + d.site + ", " + d.state + "</b><br/>" +
+          '<span class="k">Contracted MW</span> ' + fmtMW(d.contracted) + "<br/>" +
+          '<span class="k">Energized / live MW</span> ' + fmtMW(d.energized) + "<br/>" +
+          '<span class="k">Utilization</span> ' + Math.round(d.util) + "%<br/>" +
+          '<span class="k">Status</span> ' + d.status;
+        tip.style.opacity = 1;
+        move(ev);
+      });
+      card.addEventListener("mousemove", move);
+      card.addEventListener("mouseleave", function () { tip.style.opacity = 0; });
+      function move(ev) {
+        var r = stage.getBoundingClientRect();
+        var x = ev.clientX - r.left + 12, y = ev.clientY - r.top + 12;
+        if (x + 230 > r.width) x = ev.clientX - r.left - 230;
+        if (y + 96 > r.height) y = ev.clientY - r.top - 96;
+        tip.style.left = Math.max(2, x) + "px";
+        tip.style.top = Math.max(2, y) + "px";
+      }
+      grid.appendChild(card);
+    });
+  }
+
+  // Sigma wiring -- guarded per HANDOFF sec.9: an unguarded lookup can throw a
+  // top-level exception that aborts the whole script (including the synth()
+  // fallback below it), blanking the tile entirely.
+  var client = (window.sigmaComputing && window.sigmaComputing.plugin)
+    ? window.sigmaComputing.plugin.client : null;
+
+  if (client) {
+    client.config.configureEditorPanel([
+      { name: "source", type: "element" },
+      { name: "site", type: "column", source: "source",
+        allowedTypes: ["text"], label: "Site" },
+      { name: "state", type: "column", source: "source",
+        allowedTypes: ["text"], label: "State" },
+      { name: "contracted", type: "column", source: "source",
+        allowedTypes: ["number"], label: "Contracted MW" },
+      { name: "energized", type: "column", source: "source",
+        allowedTypes: ["number"], label: "Energized MW" },
+      { name: "utilization", type: "column", source: "source",
+        allowedTypes: ["number"], label: "Utilization %" },
+      { name: "status", type: "column", source: "source",
+        allowedTypes: ["text"], label: "Status" }
+    ]);
+
+    var unsub = null;
+    client.config.subscribe(function (cfg) {
+      if (unsub) { unsub(); unsub = null; }
+      if (!cfg || !cfg.source) { rows = null; draw(); return; }
+      unsub = client.elements.subscribeToElementData(cfg.source, function (d) {
+        try {
+          var g = function (k) { return cfg[k] ? (d[cfg[k]] || []) : []; };
+          var site = g("site"), state = g("state"), c = g("contracted"),
+              e = g("energized"), u = g("utilization"), st = g("status");
+          var n = Math.min(site.length, state.length, c.length, e.length, u.length, st.length);
+          var out = [];
+          for (var i = 0; i < n; i++) {
+            out.push({
+              site: String(site[i]), state: String(state[i]),
+              contracted: Number(c[i]) || 0, energized: Number(e[i]) || 0,
+              util: isFinite(Number(u[i])) ? Number(u[i]) : 0,
+              status: String(st[i] || "")
+            });
+          }
+          rows = out;
+        } catch (e) { rows = null; }
+        draw();
+      });
+    });
+  } else {
+    draw();
+  }
+
+  // ResizeObserver on the stage element, not a window resize listener.
+  if (window.ResizeObserver) new ResizeObserver(draw).observe(stage);
+  draw();   // single paint; no animation loop, so headless PNG export can idle
+})();
+</script>
+</body>
+</html>

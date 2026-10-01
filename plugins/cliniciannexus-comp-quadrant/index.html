@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Pay vs. Production</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  html,body{margin:0;height:100%;background:#FFFFFF;font-family:Inter,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#2A3742;}
+  #wrap{position:relative;width:100%;height:100%;overflow:hidden;}
+  svg{display:block;width:100%;height:100%;}
+  .axis{stroke:#D6EDEA;stroke-width:1;}
+  .gridln{stroke:#EEF6F5;stroke-width:1;}
+  .axlab{fill:#6B7680;font-size:11px;}
+  .axtitle{fill:#2A3742;font-size:12px;font-weight:700;}
+  .mktline{stroke:#123B54;stroke-width:1.6;stroke-dasharray:6 4;opacity:.75;}
+  .mktlab{fill:#123B54;font-size:10.5px;font-weight:700;}
+  .pt{stroke:#FFFFFF;stroke-width:1;cursor:pointer;transition:opacity .1s;}
+  #legend{position:absolute;top:8px;right:10px;background:rgba(255,255,255,.92);border:1px solid #E4EFED;border-radius:10px;padding:8px 10px;font-size:11px;line-height:1.55;box-shadow:0 2px 8px rgba(18,59,84,.08);}
+  #legend .row{display:flex;align-items:center;gap:6px;}
+  #legend .dot{width:9px;height:9px;border-radius:50%;display:inline-block;}
+  #tip{position:absolute;pointer-events:none;opacity:0;background:#123B54;color:#fff;padding:7px 9px;border-radius:8px;font-size:11px;line-height:1.5;box-shadow:0 4px 14px rgba(0,0,0,.25);transform:translate(-50%,-115%);white-space:nowrap;z-index:5;}
+  #tip b{color:#7FE3D8;}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <svg id="svg"></svg>
+  <div id="legend"></div>
+  <div id="tip"></div>
+</div>
+<script>
+const TEAL="#00A898", DEEPTEAL="#007A6E", CORAL="#E8734F", GOLD="#F2B134", NAVY="#123B54", GRAY="#A7B0B8";
+const fmtUSD=v=> v>=1e6? "$"+(v/1e6).toFixed(2)+"M" : v>=1e3? "$"+(v/1e3).toFixed(0)+"K" : "$"+Math.round(v);
+const fmtNum=v=> v>=1e3? (v/1e3).toFixed(1)+"K" : Math.round(v).toString();
+
+// ---- synthetic fallback so it previews standalone ----
+function synth(){
+  const specs=["Cardiology","Orthopedics","Primary Care","General Surgery","OB/GYN","Neurology","Gastroenterology","Emergency Med"];
+  const rate={Cardiology:62,Orthopedics:68,"Primary Care":52,"General Surgery":60,"OB/GYN":58,Neurology:56,Gastroenterology:61,"Emergency Med":54};
+  const rows=[]; let s=7;
+  const rnd=()=>{s=(s*9301+49297)%233280;return s/233280;};
+  for(let i=0;i<64;i++){
+    const sp=specs[i%specs.length];
+    const w=2600+Math.round(rnd()*6200);
+    const mr=rate[sp];
+    const noise=(rnd()-0.42)*0.34; // +/- around market
+    const comp=Math.round(w*mr*(1+noise));
+    rows.push({provider:"Dr. "+String.fromCharCode(65+(i%26))+". "+["Reyes","Cho","Patel","Nguyen","Brooks","Iyer","Okafor","Marsh"][i%8],specialty:sp,wrvu:w,comp:comp,rate:mr});
+  }
+  return rows;
+}
+
+let DATA=synth();
+
+function draw(){
+  const wrap=document.getElementById("wrap");
+  const W=wrap.clientWidth||720, H=wrap.clientHeight||460;
+  const svg=document.getElementById("svg");
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  const m={t:22,r:20,b:46,l:64};
+  const iw=Math.max(40,W-m.l-m.r), ih=Math.max(40,H-m.t-m.b);
+  const rows=DATA.filter(d=>d && isFinite(d.wrvu)&&isFinite(d.comp));
+  if(!rows.length){svg.innerHTML="";return;}
+  const xs=rows.map(d=>d.wrvu), ys=rows.map(d=>d.comp);
+  const xMax=Math.max(...xs)*1.06, xMin=0;
+  const yMax=Math.max(...ys)*1.08, yMin=0;
+  const rates=rows.map(d=>d.rate).filter(isFinite);
+  const mkt = rates.length? rates.reduce((a,b)=>a+b,0)/rates.length : (ys.reduce((a,b)=>a+b,0)/xs.reduce((a,b)=>a+b,0));
+  const sx=v=>m.l+(v-xMin)/(xMax-xMin)*iw;
+  const sy=v=>m.t+ih-(v-yMin)/(yMax-yMin)*ih;
+  let g="";
+  // gridlines + y ticks
+  const yt=4;
+  for(let i=0;i<=yt;i++){const v=yMin+(yMax-yMin)*i/yt;const y=sy(v);
+    g+=`<line class="gridln" x1="${m.l}" y1="${y}" x2="${m.l+iw}" y2="${y}"/>`;
+    g+=`<text class="axlab" x="${m.l-8}" y="${y+3}" text-anchor="end">${fmtUSD(v)}</text>`;}
+  const xt=5;
+  for(let i=0;i<=xt;i++){const v=xMin+(xMax-xMin)*i/xt;const x=sx(v);
+    g+=`<text class="axlab" x="${x}" y="${m.t+ih+16}" text-anchor="middle">${fmtNum(v)}</text>`;}
+  // axes
+  g+=`<line class="axis" x1="${m.l}" y1="${m.t+ih}" x2="${m.l+iw}" y2="${m.t+ih}"/>`;
+  g+=`<line class="axis" x1="${m.l}" y1="${m.t}" x2="${m.l}" y2="${m.t+ih}"/>`;
+  // market pay line: comp = wrvu * mkt
+  const lx2 = Math.min(xMax, yMax/mkt);
+  g+=`<line class="mktline" x1="${sx(0)}" y1="${sy(0)}" x2="${sx(lx2)}" y2="${sy(lx2*mkt)}"/>`;
+  g+=`<text class="mktlab" x="${sx(lx2)-4}" y="${sy(lx2*mkt)-6}" text-anchor="end">Market rate  $${Math.round(mkt)}/wRVU</text>`;
+  // points, colored by variance to market pay line
+  for(const d of rows){
+    const expected=d.wrvu*(isFinite(d.rate)?d.rate:mkt);
+    const varr=(d.comp-expected)/expected;
+    let col=TEAL, cls="Aligned to market";
+    if(varr> .12){col=CORAL; cls="Above market for production";}
+    else if(varr< -.12){col=GOLD; cls="Below market — retention risk";}
+    else if(varr>=0){col=DEEPTEAL; cls="Aligned (slightly above)";}
+    const cx=sx(d.wrvu), cy=sy(d.comp);
+    g+=`<circle class="pt" cx="${cx}" cy="${cy}" r="6" fill="${col}" fill-opacity="0.82"`+
+       ` data-p="${encodeURIComponent(d.provider||"Clinician")}" data-s="${encodeURIComponent(d.specialty||"")}"`+
+       ` data-w="${d.wrvu}" data-c="${d.comp}" data-v="${(varr*100).toFixed(1)}" data-cls="${encodeURIComponent(cls)}"/>`;
+  }
+  // axis titles
+  g+=`<text class="axtitle" x="${m.l+iw/2}" y="${H-8}" text-anchor="middle">Annual wRVU production</text>`;
+  g+=`<text class="axtitle" transform="translate(16,${m.t+ih/2}) rotate(-90)" text-anchor="middle">Total cash compensation</text>`;
+  svg.innerHTML=g;
+  // legend
+  document.getElementById("legend").innerHTML=
+    `<div class="row"><span class="dot" style="background:${CORAL}"></span>Above market for production</div>`+
+    `<div class="row"><span class="dot" style="background:${DEEPTEAL}"></span>Aligned to market</div>`+
+    `<div class="row"><span class="dot" style="background:${GOLD}"></span>Below market · retention risk</div>`+
+    `<div class="row" style="margin-top:3px;color:#6B7680">— — market pay line</div>`;
+  // tooltips
+  const tip=document.getElementById("tip");
+  svg.querySelectorAll(".pt").forEach(c=>{
+    c.addEventListener("mousemove",e=>{
+      const r=wrap.getBoundingClientRect();
+      tip.style.left=(e.clientX-r.left)+"px"; tip.style.top=(e.clientY-r.top)+"px"; tip.style.opacity=1;
+      tip.innerHTML=`<b>${decodeURIComponent(c.dataset.p)}</b> · ${decodeURIComponent(c.dataset.s)}<br>`+
+        `wRVU ${fmtNum(+c.dataset.w)} · Comp ${fmtUSD(+c.dataset.c)}<br>`+
+        `${decodeURIComponent(c.dataset.cls)} (${c.dataset.v>0?"+":""}${c.dataset.v}%)`;
+      c.setAttribute("r","8");
+    });
+    c.addEventListener("mouseleave",()=>{tip.style.opacity=0;c.setAttribute("r","6");});
+  });
+}
+
+// ---- Sigma wiring (verified pattern: window.sigmaComputing.plugin.client) ----
+var client=(window.sigmaComputing&&window.sigmaComputing.plugin&&window.sigmaComputing.plugin.client)||null;
+var st={cfg:{},data:null,unsub:null};
+function recompute(){
+  var c=st.cfg||{};
+  if(st.data && c.wrvu && st.data[c.wrvu]){
+    var W=st.data[c.wrvu]||[],
+        C=(c.comp&&st.data[c.comp])||[],
+        P=(c.provider&&st.data[c.provider])||[],
+        S=(c.specialty&&st.data[c.specialty])||[],
+        R=(c.rate&&st.data[c.rate])||[];
+    var n=Math.max(W.length,C.length), rows=[];
+    for(var i=0;i<n;i++) rows.push({
+      provider:P[i]!=null?String(P[i]):("Clinician "+(i+1)),
+      specialty:S[i]!=null?String(S[i]):"",
+      wrvu:Number(W[i])||0, comp:Number(C[i])||0,
+      rate:R[i]!=null?Number(R[i]):NaN
+    });
+    if(rows.length){ DATA=rows; draw(); return; }
+  }
+  DATA=synth(); draw();
+}
+if(client){
+  client.config.configureEditorPanel([
+    {name:"source", type:"element"},
+    {name:"provider", type:"column", source:"source", label:"Clinician"},
+    {name:"specialty", type:"column", source:"source", label:"Specialty"},
+    {name:"wrvu", type:"column", source:"source", allowedTypes:["number","integer"], label:"Annual wRVUs (x)"},
+    {name:"comp", type:"column", source:"source", allowedTypes:["number","integer"], label:"Total cash comp (y)"},
+    {name:"rate", type:"column", source:"source", allowedTypes:["number","integer"], label:"Market $/wRVU"}
+  ]);
+  client.config.subscribe(function(cfg){
+    st.cfg=cfg||{};
+    if(st.unsub){st.unsub();st.unsub=null;}
+    if(cfg&&cfg.source){ st.unsub=client.elements.subscribeToElementData(cfg.source,function(d){st.data=d;recompute();}); }
+    recompute();
+  });
+} else { recompute(); }
+
+// ResizeObserver — redraw at true panel size (Sigma sizes AFTER first paint)
+new ResizeObserver(function(){draw();}).observe(document.getElementById("wrap"));
+window.addEventListener("resize",draw);
+draw();
+</script>
+</body>
+</html>

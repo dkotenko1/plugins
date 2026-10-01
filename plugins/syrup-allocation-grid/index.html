@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Size-Curve Allocation Grid — Syrup Sigma Plugin</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,Arial,sans-serif;background:transparent;color:#e6edf7;overflow:hidden}
+  #wrap{height:100%;width:100%;display:flex;flex-direction:column;padding:14px 16px 12px;gap:10px}
+  #top{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+  #ttl{font-size:13px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;background:linear-gradient(90deg,#4d2dc0,#0088ff,#09bebe,#09be93);-webkit-background-clip:text;background-clip:text;color:transparent}
+  #stat{font-size:11px;color:#8aa0bd;white-space:nowrap}
+  #stat b{color:#fff;font-size:13px}
+  #stat .bal{color:#09be93}.und{color:#ff5c6c}.ovr{color:#f5a623}
+  #board{flex:1;display:grid;gap:8px;min-height:0;grid-template-columns:118px 1fr}
+  #rowlabels{display:grid;gap:3px}
+  .rl{display:flex;align-items:center;font-size:11px;color:#c6d3e6;font-weight:600;padding-right:8px;justify-content:flex-end;text-align:right;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  #matrix{display:flex;flex-direction:column;gap:3px;min-height:0}
+  #colhead{display:grid;gap:3px}
+  .ch{font-size:10px;color:#8aa0bd;font-weight:700;text-align:center;letter-spacing:.03em}
+  #cells{flex:1;display:grid;gap:3px;min-height:0}
+  .cell{border-radius:5px;position:relative;cursor:default;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:rgba(255,255,255,.92);transition:transform .07s;min-height:8px}
+  .cell:hover{transform:scale(1.08);z-index:5;outline:2px solid #fff;outline-offset:-1px}
+  .cell.flag::after{content:"";position:absolute;top:3px;right:3px;width:5px;height:5px;border-radius:50%;background:#fff;box-shadow:0 0 0 1.5px rgba(0,0,0,.25)}
+  #legend{display:flex;align-items:center;gap:10px;font-size:10px;color:#8aa0bd;flex-wrap:wrap}
+  #legend .sw{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+  #bar{height:8px;width:150px;border-radius:4px;background:linear-gradient(90deg,#ff5c6c,#ffd166,#09be93,#7fe0c8,#f5a623)}
+  #tip{position:fixed;pointer-events:none;background:#0a1526;border:1px solid #22406b;border-radius:9px;padding:9px 11px;font-size:11px;color:#e6edf7;opacity:0;transition:opacity .1s;z-index:10;white-space:nowrap;box-shadow:0 10px 30px rgba(0,0,0,.55)}
+  #tip b{color:#22d3ee}
+  #tip .k{color:#8aa0bd}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="top">
+    <div id="ttl">Size-Curve Allocation Grid</div>
+    <div id="stat"><span id="cnt">0</span> node-size cells · Avg fill <b id="avgV">—</b> · <span class="und" id="undV">0 understocked</span> · <span class="ovr" id="ovrV">0 markdown risk</span></div>
+  </div>
+  <div id="board">
+    <div id="rowlabels"></div>
+    <div id="matrix">
+      <div id="colhead"></div>
+      <div id="cells"></div>
+    </div>
+  </div>
+  <div id="legend">
+    <span><span class="sw" style="background:#ff5c6c"></span>Understocked &lt;0.85 (lost sales)</span>
+    <span><span class="sw" style="background:#09be93"></span>Balanced 0.85–1.20</span>
+    <span><span class="sw" style="background:#f5a623"></span>Overstocked &gt;1.20 (markdown risk)</span>
+    <span style="margin-left:auto">stock ÷ forecast demand&nbsp;<span id="bar"></span></span>
+  </div>
+</div>
+<div id="tip"></div>
+<script>
+(function(){
+  var client=(window.sigmaComputing&&window.sigmaComputing.plugin&&window.sigmaComputing.plugin.client)||null;
+  var defs=[
+    {name:'source',type:'element'},
+    {name:'store',type:'column',source:'source',label:'Store / Node'},
+    {name:'size',type:'column',source:'source',label:'Size'},
+    {name:'index',type:'column',source:'source',allowedTypes:['number','integer'],label:'Stock ÷ Demand index'},
+    {name:'units',type:'column',source:'source',allowedTypes:['number','integer'],label:'Allocated units (optional)'},
+    {name:'lowAt',type:'text',label:'Understock threshold',defaultValue:'0.85'},
+    {name:'highAt',type:'text',label:'Overstock threshold',defaultValue:'1.20'}
+  ];
+  if(client) client.config.configureEditorPanel(defs);
+
+  var SIZE_ORDER=['XXS','XS','S','M','L','XL','XXL','2XL','3XL'];
+  function lerp(a,b,t){return a+(b-a)*t;}
+  function hx(c){return ('0'+Math.round(Math.max(0,Math.min(255,c))).toString(16)).slice(-2);}
+  // diverging: red (under) -> yellow -> green (balanced ~1.0) -> teal -> amber (over)
+  function idxColor(v,lo,hi){
+    var stops=[[255,92,108],[255,209,102],[9,190,147],[127,224,200],[245,166,35]];
+    // map v in [lo-0.2 .. hi+0.4] onto 0..1 with balance(1.0) near the green stop (0.5)
+    var t;
+    if(v<=1.0){ t=0.5*Math.max(0,Math.min(1,(v-(lo-0.15))/((1.0)-(lo-0.15)))); }
+    else { t=0.5+0.5*Math.max(0,Math.min(1,(v-1.0)/((hi+0.35)-1.0))); }
+    var seg=t*4, i=Math.min(3,Math.floor(seg)), f=seg-i;
+    return '#'+hx(lerp(stops[i][0],stops[i+1][0],f))+hx(lerp(stops[i][1],stops[i+1][1],f))+hx(lerp(stops[i][2],stops[i+1][2],f));
+  }
+  var tip=document.getElementById('tip');
+  function draw(rows,stores,sizes,lo,hi){
+    var rl=document.getElementById('rowlabels'), ch=document.getElementById('colhead'), cells=document.getElementById('cells');
+    rl.innerHTML=''; ch.innerHTML=''; cells.innerHTML='';
+    rl.style.gridTemplateRows='repeat('+stores.length+',1fr)';
+    ch.style.gridTemplateColumns='repeat('+sizes.length+',1fr)';
+    cells.style.gridTemplateColumns='repeat('+sizes.length+',1fr)';
+    cells.style.gridTemplateRows='repeat('+stores.length+',1fr)';
+    // spacer above row labels to align with colhead height
+    ch.style.height='16px';
+    stores.forEach(function(s){var d=document.createElement('div');d.className='rl';d.textContent=s;d.title=s;rl.appendChild(d);});
+    sizes.forEach(function(z){var d=document.createElement('div');d.className='ch';d.textContent=z;ch.appendChild(d);});
+    var lookup={}; rows.forEach(function(r){lookup[r.store+'||'+r.size]=r;});
+    var sum=0,n=0,und=0,ovr=0;
+    stores.forEach(function(st){
+      sizes.forEach(function(sz){
+        var r=lookup[st+'||'+sz];
+        var c=document.createElement('div'); c.className='cell';
+        if(r){
+          var v=r.index; sum+=v; n++;
+          if(v<lo)und++; if(v>hi)ovr++;
+          c.style.background=idxColor(v,lo,hi);
+          if(v<lo||v>hi) c.className+=' flag';
+          c.textContent=v.toFixed(2);
+          if(v>=0.9&&v<=1.35) c.style.color='rgba(8,20,10,.82)';
+          (function(rr){
+            c.addEventListener('mousemove',function(e){
+              var state=rr.index<lo?'<span class="und">Understocked — lost-sales risk</span>':(rr.index>hi?'<span class="ovr">Overstocked — markdown risk</span>':'<span style="color:#09be93">Balanced</span>');
+              tip.innerHTML='<b>'+rr.store+'</b> &middot; size '+rr.size+'<br><span class="k">Stock ÷ demand</span> '+rr.index.toFixed(2)+(rr.units?('<br><span class="k">Allocated units</span> '+Math.round(rr.units)):'')+'<br>'+state;
+              tip.style.opacity=1; tip.style.left=(e.clientX+14)+'px'; tip.style.top=(e.clientY+14)+'px';
+            });
+            c.addEventListener('mouseleave',function(){tip.style.opacity=0;});
+          })(r);
+        } else { c.style.background='#0e1a2e'; c.style.opacity=.35; }
+        cells.appendChild(c);
+      });
+    });
+    document.getElementById('avgV').textContent=n?(sum/n).toFixed(2):'—';
+    document.getElementById('cnt').textContent=n;
+    document.getElementById('undV').textContent=und+' understocked';
+    document.getElementById('ovrV').textContent=ovr+' markdown risk';
+  }
+  function sortSizes(arr){
+    return arr.slice().sort(function(a,b){
+      var ia=SIZE_ORDER.indexOf(String(a).toUpperCase()), ib=SIZE_ORDER.indexOf(String(b).toUpperCase());
+      if(ia<0)ia=99; if(ib<0)ib=99; return ia-ib || String(a).localeCompare(String(b));
+    });
+  }
+  function synth(){
+    var stores=['Flagship – SoHo NYC','Union Sq SF','Mag Mile CHI','Rodeo Dr LA','Georgetown DC','Newbury St BOS','DTC / E-comm','Outlet – Woodbury','Pop-up – Austin','Aventura Mall MIA'];
+    var sizes=['XS','S','M','L','XL','XXL'];
+    // ideal bell size curve; introduce store/size imbalances
+    var curve={XS:0.9,S:1.05,M:1.15,L:1.1,XL:0.95,XXL:0.8};
+    var rows=[];
+    stores.forEach(function(st,si){
+      sizes.forEach(function(sz,zi){
+        var base=curve[sz];
+        var wobble=0.55*Math.sin(si*1.7+zi*0.9)+0.25*Math.cos(si*0.6-zi*1.3);
+        var v=Math.max(0.35,base+wobble*(0.35+0.12*si%3));
+        rows.push({store:st,size:sz,index:v,units:Math.round(v*(120- si*6)+40)});
+      });
+    });
+    return {rows:rows,stores:stores,sizes:sizes};
+  }
+  var st={cfg:{},data:null,unsub:null};
+  function recompute(){
+    var c=st.cfg||{}; var lo=parseFloat(c.lowAt)||0.85, hi=parseFloat(c.highAt)||1.20;
+    if(st.data&&c.index&&st.data[c.index]&&c.store&&c.size&&st.data[c.store]&&st.data[c.size]){
+      var idx=st.data[c.index]||[], store=st.data[c.store]||[], size=st.data[c.size]||[], units=(c.units&&st.data[c.units])||[];
+      var rows=[],seenS={},seenZ={},stores=[],sizes=[];
+      idx.forEach(function(v,i){
+        var s=store[i]!=null?String(store[i]):('#'+i), z=size[i]!=null?String(size[i]):'?';
+        rows.push({store:s,size:z,index:Number(v)||0,units:Number(units[i])||0});
+        if(!seenS[s]){seenS[s]=1;stores.push(s);} if(!seenZ[z]){seenZ[z]=1;sizes.push(z);}
+      });
+      if(rows.length){ draw(rows,stores,sortSizes(sizes),lo,hi); return; }
+    }
+    var s=synth(); draw(s.rows,s.stores,s.sizes,lo,hi);
+  }
+  var ro=new ResizeObserver(function(){recompute();});
+  ro.observe(document.getElementById('board'));
+  if(client){client.config.subscribe(function(cfg){st.cfg=cfg||{};
+    if(st.unsub){st.unsub();st.unsub=null;}
+    if(cfg&&cfg.source){st.unsub=client.elements.subscribeToElementData(cfg.source,function(d){st.data=d;recompute();});}
+    recompute();});
+  }else{recompute();}
+})();
+</script>
+</body>
+</html>

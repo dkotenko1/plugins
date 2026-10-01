@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Program GP% Heatmap</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  :root{
+    --navy:#122739; --blue:#428BCA; --lblue:#84B4DD; --mint:#2FA88C;
+    --amber:#E1A32D; --red:#EF4444; --ink:#122739; --muted:#5B7690; --line:#DCE7F1;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:transparent;
+    font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+    color:var(--ink);-webkit-font-smoothing:antialiased}
+  #stage{padding:2px 4px 6px;overflow:auto}
+  table.grid{border-collapse:collapse;width:100%;table-layout:fixed}
+  .grid th, .grid td{border:1px solid var(--line);padding:0}
+  .grid th{background:#F1F7FC;font-size:9.5px;font-weight:800;letter-spacing:.3px;
+    text-transform:uppercase;color:var(--muted);padding:6px 4px;text-align:center;
+    white-space:normal;word-break:break-word;line-height:1.15}
+  .corner{background:#F1F7FC}
+  .rowhead{font-size:10.5px;font-weight:700;color:var(--ink);padding:6px 8px !important;
+    text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    background:#FBFDFE}
+  .cell{position:relative;height:46px;text-align:center;vertical-align:middle}
+  .cell .wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;
+    height:100%;gap:1px}
+  .cell .score{font-size:12px;font-weight:800;font-variant-numeric:tabular-nums}
+  .cell .vol{font-size:8.5px;color:rgba(18,39,57,.62);font-weight:600}
+  .cell .flag{position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;
+    background:var(--red)}
+  .legend{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    padding:2px 4px 8px;font-size:10px;color:var(--muted);font-weight:600}
+  .legend b{font-weight:700;color:var(--ink)}
+  .lg{display:inline-flex;align-items:center;gap:5px}
+  .sw{width:20px;height:8px;border-radius:2px;display:inline-block}
+  .grad{background:linear-gradient(90deg,#FBEAEA,#FDF4E1,#DCEEF7,var(--blue))}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--red);display:inline-block}
+  .empty{padding:22px;text-align:center;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="legend" id="legend"></div>
+  <div id="gridwrap"></div>
+</div>
+<script>
+(function(){
+  "use strict";
+
+  // ---- synthetic fallback: 6 3STEP Sports programs x 4 quarters, mirrors
+  // the bound contract exactly so the plugin reads correctly unbound
+  // (editor panel, config handshake, headless PNG export).
+  function synth(){
+    var programs = ["Basketball","Football","Soccer","Lacrosse","Volleyball","Combat Sports"];
+    var quarters = ["Q1","Q2","Q3","Q4"];
+    var baseReg  = [105,78,65,48,60,18];
+    var baseGp   = [0.145,0.120,0.153,0.175,0.136,0.125];
+    var baseRisk = [0.06,0.14,0.05,0.04,0.07,0.05];
+    var rows = [];
+    for (var p=0;p<programs.length;p++){
+      for (var q=0;q<quarters.length;q++){
+        var seed = (programs[p].length*7 + q*13 + p*3) % 23;
+        var tilt = (seed - 11) / 100;
+        var seasonal = 0.85;
+        if (p===1 && (q===2||q===3)) seasonal = 1.35;
+        if (p===0 && (q===0||q===3)) seasonal = 1.30;
+        if ((p===2||p===3) && q===1) seasonal = 1.30;
+        if (p===5 && (q===2||q===3)) seasonal = 1.25;
+        rows.push({
+          program: programs[p],
+          quarter: quarters[q],
+          registrations: Math.max(4, Math.round(baseReg[p]*seasonal*(1+tilt*0.6))),
+          gp: Math.max(0.04, Math.min(0.24, baseGp[p] + tilt*0.09)),
+          risk: Math.max(0.01, Math.min(0.35, baseRisk[p] + (p===1&&(q===2||q===3)?0.05:0) + tilt*0.05))
+        });
+      }
+    }
+    return rows;
+  }
+
+  function esc(s){
+    return String(s == null ? "" : s)
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+      .replace(/"/g,"&quot;");
+  }
+
+  // Diverging red -> amber -> blue scale on GP%, 0..0.24 mapped to 0..1.
+  function scoreColor(s){
+    if (s == null || !isFinite(s)) return "#F5F8FB";
+    var x = Math.max(0, Math.min(1, s / 0.24));
+    var stops = [
+      {p:0.0,  c:[253,236,236]},
+      {p:0.45, c:[253,244,225]},
+      {p:0.7,  c:[220,238,247]},
+      {p:1.0,  c:[66,139,202]}
+    ];
+    for (var i=0;i<stops.length-1;i++){
+      var a = stops[i], b = stops[i+1];
+      if (x >= a.p && x <= b.p){
+        var t = (b.p===a.p) ? 0 : (x-a.p)/(b.p-a.p);
+        var r = Math.round(a.c[0]+(b.c[0]-a.c[0])*t);
+        var g = Math.round(a.c[1]+(b.c[1]-a.c[1])*t);
+        var bl = Math.round(a.c[2]+(b.c[2]-a.c[2])*t);
+        return "rgb("+r+","+g+","+bl+")";
+      }
+    }
+    return "rgb(66,139,202)";
+  }
+
+  function textOn(s){
+    return (s != null && s >= 0.7*0.24) ? "#FFFFFF" : "#122739";
+  }
+
+  function render(rows){
+    var wrap = document.getElementById("gridwrap");
+    var legend = document.getElementById("legend");
+
+    if (!rows || !rows.length){
+      wrap.innerHTML = '<div class="empty">No program margin rows to display.</div>';
+      legend.innerHTML = "";
+      return;
+    }
+
+    var programs = [], quarters = [];
+    var byKey = {};
+    rows.forEach(function(r){
+      if (programs.indexOf(r.program) === -1) programs.push(r.program);
+      if (quarters.indexOf(r.quarter) === -1) quarters.push(r.quarter);
+      byKey[r.program + "||" + r.quarter] = r;
+    });
+
+    // Rank programs by total registrations, highest first, so the biggest
+    // sport programs sit at the top of the grid.
+    var totals = {};
+    programs.forEach(function(p){ totals[p] = 0; });
+    rows.forEach(function(r){ totals[r.program] += (r.registrations||0); });
+    programs.sort(function(a,b){ return totals[b]-totals[a]; });
+
+    legend.innerHTML =
+      '<span class="lg"><b>GP%</b> <span class="sw grad"></span> low &rarr; high</span>' +
+      '<span class="lg"><span class="dot"></span> Below-budget rate &gt; 12%</span>' +
+      '<span class="lg" style="margin-left:auto">Registrations (K) shown per cell</span>';
+
+    var html = '<table class="grid"><colgroup><col style="width:132px">';
+    quarters.forEach(function(){ html += '<col>'; });
+    html += '</colgroup><thead><tr><th class="corner"></th>';
+    quarters.forEach(function(q){ html += '<th>'+esc(q)+'</th>'; });
+    html += '</tr></thead><tbody>';
+
+    programs.forEach(function(p){
+      html += '<tr><td class="rowhead" title="'+esc(p)+'">'+esc(p)+'</td>';
+      quarters.forEach(function(q){
+        var d = byKey[p+"||"+q];
+        if (!d){
+          html += '<td class="cell"></td>';
+        } else {
+          var bg = scoreColor(d.gp);
+          var fg = textOn(d.gp);
+          var flag = (d.risk != null && d.risk > 0.12)
+            ? '<span class="flag" title="Below-budget rate '+(d.risk*100).toFixed(1)+'%"></span>' : '';
+          html += '<td class="cell" style="background:'+bg+'" ' +
+            'title="'+esc(p)+' × '+esc(q)+': GP '+(d.gp!=null?(d.gp*100).toFixed(1)+'%':'—')+
+            ', '+(d.registrations!=null?d.registrations.toLocaleString():'—')+'K registrations, below-budget rate '+
+            (d.risk!=null?(d.risk*100).toFixed(1)+'%':'—')+'">' + flag +
+            '<div class="wrap">' +
+              '<div class="score" style="color:'+fg+'">' + (d.gp!=null?(d.gp*100).toFixed(1)+'%':'—') + '</div>' +
+              '<div class="vol" style="color:'+fg+';opacity:.85">' + (d.registrations!=null?d.registrations.toLocaleString():'—') + 'K reg.</div>' +
+            '</div>' +
+          '</td>';
+        }
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+  }
+
+  var current = synth();
+
+  var redraw = function(){ render(current); };
+  if (window.ResizeObserver){
+    new ResizeObserver(redraw).observe(document.getElementById("stage"));
+  }
+  window.addEventListener("resize", redraw);
+  window.addEventListener("load", function(){ requestAnimationFrame(redraw); });
+  requestAnimationFrame(redraw);
+
+  // ---------------- Sigma wiring ----------------
+  var client = (window.sigmaComputing && window.sigmaComputing.plugin)
+    ? window.sigmaComputing.plugin.client : null;
+
+  if (!client){ render(current); return; }
+
+  client.config.configureEditorPanel([
+    {name:"source",  type:"element"},
+    {name:"program", type:"column", source:"source", allowedTypes:["text"],   label:"Sport program"},
+    {name:"quarter", type:"column", source:"source", allowedTypes:["text"],   label:"Quarter"},
+    {name:"registrations", type:"column", source:"source", allowedTypes:["number"], label:"Registrations"},
+    {name:"gp",      type:"column", source:"source", allowedTypes:["number"], label:"GP% (0-1 or 0-100)"},
+    {name:"risk",    type:"column", source:"source", allowedTypes:["number"], label:"Below-budget rate (0-1 or 0-100)"}
+  ]);
+
+  function col(data, cfg, key){
+    var id = cfg[key];
+    return (id && data && data[id]) ? data[id] : null;
+  }
+
+  function toRows(data, cfg){
+    var p = col(data, cfg, "program");
+    if (!p || !p.length) return null;
+    var q = col(data, cfg, "quarter"), v = col(data, cfg, "registrations"),
+        s = col(data, cfg, "gp"), sl = col(data, cfg, "risk");
+    var out = [];
+    for (var i=0;i<p.length;i++){
+      var sv = s ? Number(s[i]) : null;
+      if (sv != null && sv > 1.5) sv = sv/100;
+      var slv = sl ? Number(sl[i]) : null;
+      if (slv != null && slv > 1.5) slv = slv/100;
+      out.push({
+        program: p[i],
+        quarter: q ? q[i] : "",
+        registrations: v ? Number(v[i]) : null,
+        gp: (sv != null && isFinite(sv)) ? sv : null,
+        risk: (slv != null && isFinite(slv)) ? slv : null
+      });
+    }
+    return out;
+  }
+
+  var unsub = null;
+  client.config.subscribe(function(cfg){
+    if (unsub){ try{ unsub(); }catch(e){} unsub = null; }
+    if (!cfg || !cfg.source){ current = synth(); render(current); return; }
+    unsub = client.elements.subscribeToElementData(cfg.source, function(data){
+      var rows = toRows(data, cfg);
+      current = (rows && rows.length) ? rows : synth();
+      render(current);
+    });
+  });
+
+  render(current);
+})();
+</script>
+</body>
+</html>
