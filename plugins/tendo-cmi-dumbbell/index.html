@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Documentation Integrity Gap — CMI Dumbbell</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  :root{
+    --ink:#2F3330; --muted:#7A807C; --line:#ECEEEC; --mag:#ED0B6F; --blue:#0471EC;
+    --mint:#12B886; --amber:#E1A32D;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:transparent;
+    font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+    color:var(--ink);-webkit-font-smoothing:antialiased}
+  #stage{padding:2px 4px 6px}
+  .legend{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:0 2px 8px;
+    font-size:10px;color:var(--muted);font-weight:600}
+  .legend b{color:var(--ink);font-weight:700}
+  .lg{display:inline-flex;align-items:center;gap:5px}
+  .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+  .dot.doc{background:var(--ink)}
+  .dot.exp{background:#fff;border:2px solid var(--mag)}
+  .gapkey{width:18px;height:5px;border-radius:3px;background:var(--mag);opacity:.35;display:inline-block}
+  .head,.row{display:grid;grid-template-columns:150px minmax(120px,1fr) 62px 74px 86px;
+    align-items:center;column-gap:12px}
+  .head{font-size:9px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;
+    color:var(--muted);padding:0 4px 5px;border-bottom:1px solid var(--line)}
+  .head .r,.row .r{text-align:right}
+  .row{padding:7px 4px;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:0}
+  .nm{font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .track{position:relative;height:18px}
+  .track:before{content:"";position:absolute;left:0;right:0;top:8px;height:2px;
+    background:var(--line);border-radius:1px}
+  .bar{position:absolute;top:6px;height:6px;border-radius:3px;background:var(--mag)}
+  .pt{position:absolute;top:2px;width:14px;height:14px;margin-left:-7px;border-radius:50%}
+  .pt.doc{background:var(--ink);border:2px solid #fff;box-shadow:0 0 0 1px var(--ink)}
+  .pt.exp{background:#fff;border:2.5px solid var(--mag)}
+  .num{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}
+  .num small{font-size:9px;font-weight:600;color:var(--muted);margin-left:2px}
+  .gp{color:var(--mag)} .gp.lo{color:var(--amber)} .gp.ok{color:var(--mint)}
+  .cap{font-size:12.5px;font-weight:800;font-variant-numeric:tabular-nums}
+  .empty{padding:22px;text-align:center;color:var(--muted);font-size:12px}
+  .synth{display:inline-block;margin-right:6px;padding:1px 5px;border-radius:3px;
+    background:#FDF0D5;color:#8A5A00;font-weight:700;font-size:9px;letter-spacing:.06em;
+    text-transform:uppercase;vertical-align:1px}
+  @media (max-width:640px){
+    .head,.row{grid-template-columns:100px minmax(80px,1fr) 70px}
+    .head .h-g,.row .c-g,.head .h-q,.row .c-q{display:none}
+  }
+</style>
+</head>
+<body>
+<div id="stage"><div class="legend" id="legend"></div><div id="body"></div></div>
+<script>
+(function(){
+  "use strict";
+  var IS_SYNTH = false;
+
+  // Synthetic fallback: same shape as the bound contract, used only unbound
+  // (editor handshake) or after the no-data timeout. Always tagged SAMPLE DATA.
+  function synth(){
+    IS_SYNTH = true;
+    return [
+      {line:"Cardiology",        doc:1.92, exp:2.07, q:412, cap:3420},
+      {line:"Neurosciences",     doc:1.74, exp:1.88, q:296, cap:2650},
+      {line:"Orthopedics",       doc:1.58, exp:1.67, q:341, cap:2210},
+      {line:"Oncology",          doc:2.21, exp:2.31, q:188, cap:1980},
+      {line:"General Surgery",   doc:1.66, exp:1.74, q:254, cap:1640},
+      {line:"Pulmonary",         doc:1.41, exp:1.50, q:219, cap:1310},
+      {line:"Nephrology",        doc:1.52, exp:1.58, q:132, cap:870},
+      {line:"Gastroenterology",  doc:1.19, exp:1.23, q:121, cap:540}
+    ];
+  }
+
+  function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+  function money(k){ return k>=1000 ? "$"+(k/1000).toFixed(2)+"M" : "$"+Math.round(k)+"K"; }
+
+  function render(rows){
+    var body=document.getElementById("body"), legend=document.getElementById("legend");
+    if (rows==null){
+      body.innerHTML='<div class="empty">Loading documentation gap data...</div>';
+      legend.innerHTML=""; return;
+    }
+    if (!rows.length){
+      body.innerHTML='<div class="empty">No service lines to display.</div>';
+      legend.innerHTML=""; return;
+    }
+    var lo=Infinity, hi=-Infinity;
+    rows.forEach(function(d){ lo=Math.min(lo,d.doc,d.exp); hi=Math.max(hi,d.doc,d.exp); });
+    var pad=(hi-lo)*0.08||0.1; lo-=pad; hi+=pad;
+    function x(v){ return ((v-lo)/(hi-lo))*100; }
+    var tot=0,q=0; rows.forEach(function(d){tot+=d.cap; q+=d.q;});
+
+    legend.innerHTML =
+      '<span class="lg"><span class="dot doc"></span>Documented CMI</span>'+
+      '<span class="lg"><span class="dot exp"></span>Expected CMI</span>'+
+      '<span class="lg"><span class="gapkey"></span>Documentation gap</span>'+
+      '<span class="lg" style="margin-left:auto">'+
+      (IS_SYNTH?'<span class="synth">sample data</span>illustrative shape, not bound to a source'
+              :'<b>'+rows.length+'</b> service lines &middot; <b>'+q.toLocaleString()+'</b> open queries &middot; <b>'+money(tot)+'</b> capture opportunity')+
+      '</span>';
+
+    var h='<div class="head"><div>Service line</div><div>Documented vs expected CMI</div>'+
+          '<div class="r h-g">CMI gap</div><div class="r h-q">Open queries</div><div class="r">Capture / yr</div></div>';
+    h+=rows.map(function(d){
+      var gap=d.exp-d.doc, a=Math.min(x(d.doc),x(d.exp)), b=Math.max(x(d.doc),x(d.exp));
+      var cls = gap>=0.12 ? "" : gap>=0.06 ? "lo" : "ok";
+      return '<div class="row">'+
+        '<div class="nm" title="'+esc(d.line)+'">'+esc(d.line)+'</div>'+
+        '<div class="track">'+
+          '<div class="bar" style="left:'+a.toFixed(2)+'%;width:'+Math.max(0.6,(b-a)).toFixed(2)+'%;opacity:'+(gap>=0.12?0.55:0.35)+'"></div>'+
+          '<div class="pt exp" style="left:'+x(d.exp).toFixed(2)+'%"></div>'+
+          '<div class="pt doc" style="left:'+x(d.doc).toFixed(2)+'%"></div>'+
+        '</div>'+
+        '<div class="r c-g num gp '+cls+'">'+(gap>=0?'+':'')+gap.toFixed(2)+'</div>'+
+        '<div class="r c-q num">'+Math.round(d.q).toLocaleString()+'</div>'+
+        '<div class="r cap">'+money(d.cap)+'</div>'+
+      '</div>';
+    }).join("");
+    body.innerHTML=h;
+  }
+
+  var client=(window.sigmaComputing && window.sigmaComputing.plugin)?window.sigmaComputing.plugin.client:null;
+  var FALLBACK_MS=6000;
+  var current = client ? null : synth();
+  var gotData=false;
+
+  var redraw=function(){render(current);};
+  if (window.ResizeObserver){ new ResizeObserver(redraw).observe(document.getElementById("stage")); }
+  window.addEventListener("resize",redraw);
+  window.addEventListener("load",function(){requestAnimationFrame(redraw);});
+  requestAnimationFrame(redraw);
+  if(!client){return;}
+
+  setTimeout(function(){ if(!gotData && current==null){ current=synth(); render(current);} },FALLBACK_MS);
+
+  client.config.configureEditorPanel([
+    {name:"source", type:"element"},
+    {name:"line", type:"column", source:"source", allowedTypes:["text"],   label:"Service line"},
+    {name:"doc",  type:"column", source:"source", allowedTypes:["number"], label:"Documented CMI"},
+    {name:"exp",  type:"column", source:"source", allowedTypes:["number"], label:"Expected CMI"},
+    {name:"q",    type:"column", source:"source", allowedTypes:["number"], label:"Open queries"},
+    {name:"cap",  type:"column", source:"source", allowedTypes:["number"], label:"Capture opportunity ($K / yr)"}
+  ]);
+
+  function col(data,cfg,k){var id=cfg[k];return (id&&data&&data[id])?data[id]:null;}
+  function toRows(data,cfg){
+    var ln=col(data,cfg,"line"); if(!ln||!ln.length) return null;
+    var d=col(data,cfg,"doc"),e=col(data,cfg,"exp"),q=col(data,cfg,"q"),c=col(data,cfg,"cap");
+    var out=[];
+    for(var i=0;i<ln.length;i++){
+      var dv=d?Number(d[i]):0, ev=e?Number(e[i]):0;
+      out.push({line:ln[i],doc:isFinite(dv)?dv:0,exp:isFinite(ev)?ev:0,q:q?Number(q[i])||0:0,cap:c?Number(c[i])||0:0});
+    }
+    out.sort(function(a,b){return b.cap-a.cap;});
+    return out;
+  }
+  // Object-vs-string element binding: normalise both.
+  function srcId(cfg){var s=cfg&&cfg.source; if(!s) return null; return (typeof s==="string")?s:(s.elementId||s.id||null);}
+
+  var unsub=null;
+  client.config.subscribe(function(cfg){
+    if(unsub){try{unsub();}catch(e){} unsub=null;}
+    var sid=srcId(cfg);
+    if(!sid){current=synth();render(current);return;}
+    unsub=client.elements.subscribeToElementData(sid,function(data){
+      var rows=toRows(data,cfg); gotData=true; IS_SYNTH=false; current=rows||[]; render(current);
+    });
+  });
+  render(current);
+})();
+</script>
+</body>
+</html>
