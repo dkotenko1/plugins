@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Catastrophe & RDS Appetite Board</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  :root{
+    --ink:#344049; --muted:#7B8791; --line:#E8ECEF; --blue:#215AA8; --blue2:#0057B8;
+    --mint:#1FA67A; --amber:#E1A32D; --red:#D6453D; --track:#EEF1F4;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:transparent;
+    font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+    color:var(--ink);-webkit-font-smoothing:antialiased}
+  #stage{padding:2px 4px 6px}
+  .legend{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:0 2px 8px;
+    font-size:10px;color:var(--muted);font-weight:600}
+  .legend b{color:var(--ink);font-weight:700}
+  .lg{display:inline-flex;align-items:center;gap:5px}
+  .sw{width:10px;height:10px;border-radius:2px;display:inline-block}
+  .tickkey{display:inline-block;width:2px;height:12px;background:var(--ink);vertical-align:-2px}
+  .head,.row{display:grid;grid-template-columns:230px minmax(150px,1.2fr) 86px 86px 84px 74px;
+    align-items:center;column-gap:12px}
+  .head{font-size:9px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;
+    color:var(--muted);padding:0 4px 5px;border-bottom:1px solid var(--line)}
+  .head .r,.row .r{text-align:right}
+  .head .c,.row .c{text-align:center}
+  .row{padding:7px 4px;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:0}
+  .nm{min-width:0}
+  .nm .t{font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .nm .k{display:inline-block;margin-top:2px;padding:1px 7px;border-radius:999px;background:#E9F0F9;
+    color:var(--blue);font-size:9px;font-weight:800;letter-spacing:.3px;text-transform:uppercase}
+  .bar{position:relative;height:12px;border-radius:6px;background:var(--track)}
+  .bar i{position:absolute;left:0;top:0;bottom:0;border-radius:6px}
+  .bar u{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--ink);border-radius:1px}
+  .num{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;text-align:right}
+  .num small{font-size:9px;color:var(--muted);font-weight:600;margin-left:2px}
+  .util{display:inline-block;min-width:58px;text-align:center;padding:3px 8px;border-radius:6px;
+    font-size:12px;font-weight:800;font-variant-numeric:tabular-nums}
+  .util.ok{background:#E3F5EE;color:#0B7A57}
+  .util.mid{background:#FDF4E1;color:#946A0C}
+  .util.hi{background:#FDECEC;color:#B42318}
+  .empty{padding:22px;text-align:center;color:var(--muted);font-size:12px}
+  .synth{display:inline-block;margin-right:6px;padding:1px 5px;border-radius:3px;background:#FDF0D5;
+    color:#8A5A00;font-weight:700;font-size:9px;letter-spacing:.06em;text-transform:uppercase;vertical-align:1px}
+  @media (max-width:760px){
+    .head,.row{grid-template-columns:150px minmax(90px,1fr) 70px}
+    .head .h-g,.row .c-g,.head .h-l,.row .c-l,.head .h-a,.row .c-a{display:none}
+  }
+</style>
+</head>
+<body>
+<div id="stage"><div class="legend" id="legend"></div><div id="body"></div></div>
+<script>
+(function(){
+  "use strict";
+  var IS_SYNTH=false, SCALE=1.25;   // bar track runs to 125% of appetite
+
+  // Synthetic fallback, same shape as the bound contract; always tagged SAMPLE DATA.
+  function synth(){
+    IS_SYNTH=true;
+    return [
+      {s:"Cyber: widespread ransomware RDS",k:"Cyber",g:540,n:210,l:195,a:3100,o:1},
+      {s:"Gulf Coast hurricane (1-in-100)",k:"Property & Cat",g:980,n:360,l:340,a:2710,o:1},
+      {s:"Cyber: cloud-provider outage RDS",k:"Cyber",g:610,n:190,l:200,a:2900,o:0},
+      {s:"Construction: wrap-up latent defect",k:"Construction",g:350,n:130,l:140,a:1900,o:0},
+      {s:"Florida windstorm (1-in-100)",k:"Property & Cat",g:1240,n:412,l:450,a:3150,o:0},
+      {s:"California earthquake (1-in-250)",k:"Property & Cat",g:760,n:285,l:330,a:1480,o:0}
+    ];
+  }
+  function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+  function cls(u){ return u>1.0?"hi": u>=0.85?"mid":"ok"; }
+  function colr(u){ return u>1.0?"var(--red)": u>=0.85?"var(--amber)":"var(--mint)"; }
+  function money(v){ return "$"+Math.round(v).toLocaleString()+"M"; }
+
+  function render(rows){
+    var body=document.getElementById("body"), legend=document.getElementById("legend");
+    if(rows==null){ body.innerHTML='<div class="empty">Loading catastrophe and RDS exposure...</div>'; legend.innerHTML=""; return; }
+    if(!rows.length){ body.innerHTML='<div class="empty">No scenarios to display.</div>'; legend.innerHTML=""; return; }
+    var net=0,lim=0,over=0,near=0;
+    rows.forEach(function(d){ net+=d.n; lim+=d.l; var u=d.l>0?d.n/d.l:0; if(u>1)over++; else if(u>=0.85)near++; });
+    legend.innerHTML=
+      '<span class="lg"><span class="sw" style="background:var(--mint)"></span>Within appetite</span>'+
+      '<span class="lg"><span class="sw" style="background:var(--amber)"></span>85-100% of appetite</span>'+
+      '<span class="lg"><span class="sw" style="background:var(--red)"></span>Over appetite</span>'+
+      '<span class="lg"><span class="tickkey"></span>Board appetite limit</span>'+
+      '<span class="lg" style="margin-left:auto">'+
+      (IS_SYNTH?'<span class="synth">sample data</span>illustrative shape, not bound to a source'
+              :'<b>'+rows.length+'</b> scenarios &middot; <b>'+money(net)+'</b> net PML vs <b>'+money(lim)+'</b> appetite &middot; <b>'+over+'</b> over limit &middot; <b>'+near+'</b> within 15%')+
+      '</span>';
+    var h='<div class="head"><div>Scenario</div><div>Net PML vs board appetite</div>'+
+          '<div class="r h-g">Gross PML</div><div class="r h-l">Appetite</div>'+
+          '<div class="c">Utilization</div><div class="r h-a">Accounts</div></div>';
+    h+=rows.map(function(d){
+      var u=d.l>0?d.n/d.l:0;
+      var w=Math.min(u,SCALE)/SCALE*100, tick=100/SCALE;
+      return '<div class="row">'+
+        '<div class="nm"><div class="t" title="'+esc(d.s)+'">'+esc(d.s)+'</div><span class="k">'+esc(d.k)+'</span></div>'+
+        '<div class="bar"><i style="width:'+w.toFixed(1)+'%;background:'+colr(u)+'"></i><u style="left:'+tick.toFixed(1)+'%"></u></div>'+
+        '<div class="num c-g">'+Math.round(d.g).toLocaleString()+'<small>M</small></div>'+
+        '<div class="num c-l">'+Math.round(d.l).toLocaleString()+'<small>M</small></div>'+
+        '<div class="c"><span class="util '+cls(u)+'">'+Math.round(u*100)+'%</span></div>'+
+        '<div class="num c-a">'+Math.round(d.a).toLocaleString()+'</div>'+
+      '</div>';
+    }).join("");
+    body.innerHTML=h;
+  }
+
+  var client=(window.sigmaComputing && window.sigmaComputing.plugin)?window.sigmaComputing.plugin.client:null;
+  var FALLBACK_MS=6000;
+  var current = client ? null : synth();
+  var gotData=false;
+
+  var redraw=function(){render(current);};
+  if(window.ResizeObserver){ new ResizeObserver(redraw).observe(document.getElementById("stage")); }
+  window.addEventListener("resize",redraw);
+  window.addEventListener("load",function(){requestAnimationFrame(redraw);});
+  requestAnimationFrame(redraw);
+  if(!client){return;}
+
+  setTimeout(function(){ if(!gotData && current==null){ current=synth(); render(current);} },FALLBACK_MS);
+
+  client.config.configureEditorPanel([
+    {name:"source", type:"element"},
+    {name:"scen",   type:"column", source:"source", allowedTypes:["text"],   label:"Scenario"},
+    {name:"cls",    type:"column", source:"source", allowedTypes:["text"],   label:"Class of business"},
+    {name:"gross",  type:"column", source:"source", allowedTypes:["number"], label:"Gross PML ($M)"},
+    {name:"net",    type:"column", source:"source", allowedTypes:["number"], label:"Net PML ($M)"},
+    {name:"lim",    type:"column", source:"source", allowedTypes:["number"], label:"Board appetite ($M)"},
+    {name:"acc",    type:"column", source:"source", allowedTypes:["number"], label:"Accounts in scenario"}
+  ]);
+
+  function col(data,cfg,k){var id=cfg[k];return (id&&data&&data[id])?data[id]:null;}
+  function toRows(data,cfg){
+    var S=col(data,cfg,"scen"); if(!S||!S.length) return null;
+    var K=col(data,cfg,"cls"),G=col(data,cfg,"gross"),N=col(data,cfg,"net"),L=col(data,cfg,"lim"),A=col(data,cfg,"acc");
+    var out=[];
+    for(var i=0;i<S.length;i++){
+      out.push({s:S[i],k:K?K[i]:"",g:G?Number(G[i])||0:0,n:N?Number(N[i])||0:0,l:L?Number(L[i])||0:0,a:A?Number(A[i])||0:0});
+    }
+    out.sort(function(a,b){return (b.l?b.n/b.l:0)-(a.l?a.n/a.l:0);});
+    return out;
+  }
+  // Object-vs-string element binding: normalise both.
+  function srcId(cfg){var s=cfg&&cfg.source; if(!s) return null; return (typeof s==="string")?s:(s.elementId||s.id||null);}
+
+  var unsub=null;
+  client.config.subscribe(function(cfg){
+    if(unsub){try{unsub();}catch(e){} unsub=null;}
+    var sid=srcId(cfg);
+    if(!sid){current=synth();render(current);return;}
+    unsub=client.elements.subscribeToElementData(sid,function(data){
+      var rows=toRows(data,cfg); gotData=true; IS_SYNTH=false; current=rows||[]; render(current);
+    });
+  });
+  render(current);
+})();
+</script>
+</body>
+</html>
