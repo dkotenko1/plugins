@@ -56,11 +56,11 @@
 <script>
 (function(){
   "use strict";
-  var IS_SYNTH=false, SCALE=1.25;   // bar track runs to 125% of appetite
+  var IS_SYNTH=false, SYNTH_WHY="", SCALE=1.25;   // SYNTH_WHY says why sample data is showing   // bar track runs to 125% of appetite
 
   // Synthetic fallback, same shape as the bound contract; always tagged SAMPLE DATA.
-  function synth(){
-    IS_SYNTH=true;
+  function synth(why){
+    IS_SYNTH=true; SYNTH_WHY=why||"";
     return [
       {s:"Cyber: widespread ransomware RDS",k:"Cyber",g:540,n:210,l:195,a:3100,o:1},
       {s:"Gulf Coast hurricane (1-in-100)",k:"Property & Cat",g:980,n:360,l:340,a:2710,o:1},
@@ -87,7 +87,7 @@
       '<span class="lg"><span class="sw" style="background:var(--red)"></span>Over appetite</span>'+
       '<span class="lg"><span class="tickkey"></span>Board appetite limit</span>'+
       '<span class="lg" style="margin-left:auto">'+
-      (IS_SYNTH?'<span class="synth">sample data</span>illustrative shape, not bound to a source'
+      (IS_SYNTH?'<span class="synth">sample data</span>illustrative shape, not bound to a source'+(SYNTH_WHY?' ('+SYNTH_WHY+')':'')+'
               :'<b>'+rows.length+'</b> scenarios &middot; <b>'+money(net)+'</b> net PML vs <b>'+money(lim)+'</b> appetite &middot; <b>'+over+'</b> over limit &middot; <b>'+near+'</b> within 15%')+
       '</span>';
     var h='<div class="head"><div>Scenario</div><div>Net PML vs board appetite</div>'+
@@ -110,7 +110,7 @@
 
   var client=(window.sigmaComputing && window.sigmaComputing.plugin)?window.sigmaComputing.plugin.client:null;
   var FALLBACK_MS=6000;
-  var current = client ? null : synth();
+  var current = client ? null : synth("Sigma SDK not loaded");
   var gotData=false;
 
   var redraw=function(){render(current);};
@@ -120,7 +120,7 @@
   requestAnimationFrame(redraw);
   if(!client){return;}
 
-  setTimeout(function(){ if(!gotData && current==null){ current=synth(); render(current);} },FALLBACK_MS);
+  setTimeout(function(){ if(!gotData && current==null){ current=synth("no data received after 6s"); render(current);} },FALLBACK_MS);
 
   client.config.configureEditorPanel([
     {name:"source", type:"element"},
@@ -150,7 +150,7 @@
   client.config.subscribe(function(cfg){
     if(unsub){try{unsub();}catch(e){} unsub=null;}
     var sid=srcId(cfg);
-    if(!sid){current=synth();render(current);return;}
+    if(!sid){current=synth("no source element configured");render(current);return;}
     unsub=client.elements.subscribeToElementData(sid,function(data){
       var rows=toRows(data,cfg); gotData=true; IS_SYNTH=false; current=rows||[]; render(current);
     });
