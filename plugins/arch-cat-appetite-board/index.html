@@ -3,7 +3,11 @@
 <head>
 <meta charset="utf-8">
 <title>Catastrophe & RDS Appetite Board</title>
-<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<!-- The SDK's browser (UMD) build calls React.createContext at load, so React must
+     be on the page first, and it exposes window.SigmaPlugin (there is no
+     window.sigmaComputing global in any SDK version). Both pinned. -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/@sigmacomputing/plugin@1.3.2/dist/umd/sigmacomputing-plugin.umd.js"></script>
 <style>
   :root{
     --ink:#344049; --muted:#7B8791; --line:#E8ECEF; --blue:#215AA8; --blue2:#0057B8;
@@ -56,7 +60,7 @@
 <script>
 (function(){
   "use strict";
-  var IS_SYNTH=false, SYNTH_WHY="", SCALE=1.25;   // SYNTH_WHY says why sample data is showing   // bar track runs to 125% of appetite
+  var IS_SYNTH=false, SYNTH_WHY="", SCALE=1.25;   // SYNTH_WHY says why sample data is showing; bar track runs to 125% of appetite
 
   // Synthetic fallback, same shape as the bound contract; always tagged SAMPLE DATA.
   function synth(why){
@@ -87,7 +91,7 @@
       '<span class="lg"><span class="sw" style="background:var(--red)"></span>Over appetite</span>'+
       '<span class="lg"><span class="tickkey"></span>Board appetite limit</span>'+
       '<span class="lg" style="margin-left:auto">'+
-      (IS_SYNTH?'<span class="synth">sample data</span>illustrative shape, not bound to a source'+(SYNTH_WHY?' ('+SYNTH_WHY+')':'')+'
+      (IS_SYNTH?'<span class="synth">sample data</span>illustrative shape, not bound to a source'+(SYNTH_WHY?' ('+SYNTH_WHY+')':'')
               :'<b>'+rows.length+'</b> scenarios &middot; <b>'+money(net)+'</b> net PML vs <b>'+money(lim)+'</b> appetite &middot; <b>'+over+'</b> over limit &middot; <b>'+near+'</b> within 15%')+
       '</span>';
     var h='<div class="head"><div>Scenario</div><div>Net PML vs board appetite</div>'+
@@ -108,9 +112,10 @@
     body.innerHTML=h;
   }
 
-  var client=(window.sigmaComputing && window.sigmaComputing.plugin)?window.sigmaComputing.plugin.client:null;
+  var client=(window.SigmaPlugin && window.SigmaPlugin.client)
+    || ((window.sigmaComputing && window.sigmaComputing.plugin) ? window.sigmaComputing.plugin.client : null);
   var FALLBACK_MS=6000;
-  var current = client ? null : synth("Sigma SDK not loaded");
+  var current = client ? null : synth("Sigma SDK not loaded - check React and SDK script tags");
   var gotData=false;
 
   var redraw=function(){render(current);};
