@@ -23,7 +23,12 @@
   <div class="grid-title">Carrier Compliance &amp; Savings Recovery Grid</div>
   <div id="gridHost"></div>
 </div>
-<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<!-- The SDK's browser build needs React on the page first and exposes window.SigmaPlugin
+     (no SDK version defines window.sigmaComputing). Both pinned; the shim below maps the real
+     client onto the global names this file looks up. -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/@sigmacomputing/plugin@1.3.2/dist/umd/sigmacomputing-plugin.umd.js"></script>
+<script>(function(w){var c=w.SigmaPlugin&&w.SigmaPlugin.client;if(!c)return;w.sigmaComputing=w.sigmaComputing||{};w.sigmaComputing.client=c;w.sigmaComputing.plugin=w.sigmaComputing.plugin||{client:c};w.SigmaComputing=w.SigmaComputing||w.sigmaComputing;})(window);</script>
 <script>
 (function () {
   var client = (window.sigmaComputing && window.sigmaComputing.plugin)
