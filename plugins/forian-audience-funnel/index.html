@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Forian Audience Reach Funnel</title>
+<!-- The SDK's browser build needs React on the page first and exposes window.SigmaPlugin
+     (no SDK version defines window.sigmaComputing). Both pinned; the shim below maps the real
+     client onto the global names this file looks up. -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/@sigmacomputing/plugin@1.3.2/dist/umd/sigmacomputing-plugin.umd.js"></script>
+<script>(function(w){var c=w.SigmaPlugin&&w.SigmaPlugin.client;if(!c)return;w.sigmaComputing=w.sigmaComputing||{};w.sigmaComputing.client=c;w.sigmaComputing.plugin=w.sigmaComputing.plugin||{client:c};w.SigmaComputing=w.SigmaComputing||w.sigmaComputing;})(window);</script>
+<style>
+  :root{
+    --ink:#25304D; --muted:#7B8499; --line:#E8ECF3;
+    --indigo:#48577C; --steel:#528BAC; --sky:#5BC1DE; --pale:#D6EEF7;
+    --mint:#12B886; --amber:#E1A32D; --red:#E5484D;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:transparent;
+    font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+    color:var(--ink);-webkit-font-smoothing:antialiased}
+  #stage{padding:2px 4px 6px}
+  .legend{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:0 2px 8px;
+    font-size:10px;color:var(--muted);font-weight:600}
+  .legend b{color:var(--ink);font-weight:700}
+  .lg{display:inline-flex;align-items:center;gap:5px}
+  .sw{width:10px;height:10px;border-radius:2px;display:inline-block}
+  .head,.row{display:grid;grid-template-columns:210px minmax(180px,1.6fr) 74px 86px 88px;
+    align-items:center;column-gap:14px}
+  .head{font-size:9px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;
+    color:var(--muted);padding:0 4px 5px;border-bottom:1px solid var(--line)}
+  .head .c,.row .c{text-align:center}
+  .row{padding:7px 4px;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:0}
+  .nm{min-width:0}
+  .nm b{display:block;font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .kind{display:inline-block;margin-top:2px;padding:1px 7px;border-radius:999px;font-size:8.5px;font-weight:800;
+    letter-spacing:.4px;text-transform:uppercase}
+  .kind.hcp{background:#E6EAF4;color:#3A4A74}
+  .kind.con{background:#DDF1F9;color:#1F7396}
+  .fun{position:relative;height:22px}
+  .fun i{position:absolute;left:0;top:50%;transform:translateY(-50%);border-radius:5px}
+  .fun .u{height:20px;background:var(--pale)}
+  .fun .m{height:15px;background:var(--sky)}
+  .fun .a{height:10px;background:var(--steel)}
+  .fun .t{height:5px;background:var(--indigo)}
+  .num{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+  .num small{font-size:9px;color:var(--muted);font-weight:600;margin-left:2px}
+  .pill{display:inline-block;min-width:58px;text-align:center;padding:3px 8px;border-radius:6px;
+    font-size:12px;font-weight:800;font-variant-numeric:tabular-nums}
+  .pill.ok{background:#E6F7F1;color:#0B7A57}
+  .pill.mid{background:#FDF4E1;color:#946A0C}
+  .pill.lo{background:#FDECEC;color:#B42318}
+  .empty{padding:22px;text-align:center;color:var(--muted);font-size:12px}
+  .synth{display:inline-block;margin-right:6px;padding:1px 5px;border-radius:3px;background:#FDF0D5;
+    color:#8A5A00;font-weight:700;font-size:9px;letter-spacing:.06em;text-transform:uppercase;vertical-align:1px}
+  @media (max-width:700px){
+    .head,.row{grid-template-columns:130px minmax(90px,1fr) 70px}
+    .head .h-a,.row .c-a,.head .h-l,.row .c-l{display:none}
+  }
+</style>
+</head>
+<body>
+<div id="stage"><div class="legend" id="legend"></div><div id="body"></div></div>
+<script>
+(function(){
+  "use strict";
+  var IS_SYNTH=false, MATCH_TARGET=75;
+
+  // Synthetic fallback, same shape as the bound contract; always tagged SAMPLE DATA.
+  function synth(){
+    IS_SYNTH=true;
+    return [
+      {a:"Oncology HCPs: NSCLC prescribers",u:48.2,m:44.9,d:41.8,t:31.4,l:18.6},
+      {a:"Cardiology HCPs: HFrEF treaters",u:61.5,m:56.8,d:52.1,t:38.9,l:14.2},
+      {a:"Consumer: T2D adults 45-64",u:9400,m:6110,d:4580,t:2310,l:9.8},
+      {a:"Consumer: Moderate-severe asthma",u:3100,m:1830,d:1290,t:520,l:6.1}
+    ];
+  }
+  function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+  function fmtK(v){ return v>=1000? (v/1000).toFixed(v>=10000?0:1)+"M" : (v>=100?Math.round(v):v.toFixed(1))+"K"; }
+  function isCon(n){ return /^consumer/i.test(n); }
+  function matchCls(p){ return p>=MATCH_TARGET?"ok": p>=MATCH_TARGET*0.85?"mid":"lo"; }
+
+  function render(rows){
+    var body=document.getElementById("body"), legend=document.getElementById("legend");
+    if(rows==null){ body.innerHTML='<div class="empty">Loading audience funnel...</div>'; legend.innerHTML=""; return; }
+    if(!rows.length){ body.innerHTML='<div class="empty">No audiences to display.</div>'; legend.innerHTML=""; return; }
+    var U=0,M=0,A=0,T=0,below=0;
+    rows.forEach(function(d){U+=d.u;M+=d.m;A+=d.d;T+=d.t; if(d.u>0 && d.m/d.u*100<MATCH_TARGET*0.85)below++;});
+    legend.innerHTML=
+      '<span class="lg"><span class="sw" style="background:var(--pale)"></span>Universe</span>'+
+      '<span class="lg"><span class="sw" style="background:var(--sky)"></span>Matched</span>'+
+      '<span class="lg"><span class="sw" style="background:var(--steel)"></span>Addressable</span>'+
+      '<span class="lg"><span class="sw" style="background:var(--indigo)"></span>Activated</span>'+
+      '<span class="lg" style="margin-left:auto">'+
+      (IS_SYNTH?'<span class="synth">sample data</span>illustrative shape, not bound to a source'
+              :'<b>'+rows.length+'</b> audiences &middot; <b>'+(U>0?(M/U*100).toFixed(0):0)+'%</b> blended match rate &middot; <b>'+(U>0?(T/U*100).toFixed(0):0)+'%</b> of universe activated &middot; <b>'+below+'</b> below match target')+
+      '</span>';
+    var h='<div class="head"><div>Audience</div><div>Reach funnel (each bar scaled to its own universe)</div>'+
+          '<div class="c" style="text-align:right">Activated</div><div class="c">Match rate</div><div class="c h-l">Lift vs control</div></div>';
+    h+=rows.map(function(d){
+      var mp=d.u>0?d.m/d.u*100:0, ap=d.u>0?d.d/d.u*100:0, tp=d.u>0?d.t/d.u*100:0;
+      var con=isCon(d.a);
+      var lc=d.l>=12?"ok":d.l>=7?"mid":"lo";
+      return '<div class="row">'+
+        '<div class="nm"><b title="'+esc(d.a)+'">'+esc(d.a)+'</b><span class="kind '+(con?'con':'hcp')+'">'+(con?'Consumer':'HCP')+'</span></div>'+
+        '<div class="fun" title="Universe '+fmtK(d.u)+' / matched '+fmtK(d.m)+' / addressable '+fmtK(d.d)+' / activated '+fmtK(d.t)+'">'+
+          '<i class="u" style="width:100%"></i>'+
+          '<i class="m" style="width:'+mp.toFixed(1)+'%"></i>'+
+          '<i class="a" style="width:'+ap.toFixed(1)+'%"></i>'+
+          '<i class="t" style="width:'+tp.toFixed(1)+'%"></i></div>'+
+        '<div class="num c-a">'+fmtK(d.t)+'<small>'+tp.toFixed(0)+'%</small></div>'+
+        '<div class="c"><span class="pill '+matchCls(mp)+'">'+mp.toFixed(0)+'%</span></div>'+
+        '<div class="c c-l"><span class="pill '+lc+'">+'+d.l.toFixed(1)+'%</span></div>'+
+      '</div>';
+    }).join("");
+    body.innerHTML=h;
+  }
+
+  var client=(window.sigmaComputing && window.sigmaComputing.plugin)?window.sigmaComputing.plugin.client:null;
+  var FALLBACK_MS=6000;
+  var current = client ? null : synth();
+  var gotData=false;
+
+  var redraw=function(){render(current);};
+  if(window.ResizeObserver){ new ResizeObserver(redraw).observe(document.getElementById("stage")); }
+  window.addEventListener("resize",redraw);
+  window.addEventListener("load",function(){requestAnimationFrame(redraw);});
+  requestAnimationFrame(redraw);
+  if(!client){return;}
+
+  setTimeout(function(){ if(!gotData && current==null){ current=synth(); render(current);} },FALLBACK_MS);
+
+  client.config.configureEditorPanel([
+    {name:"source", type:"element"},
+    {name:"aud",  type:"column", source:"source", allowedTypes:["text"],   label:"Audience"},
+    {name:"uni",  type:"column", source:"source", allowedTypes:["number"], label:"Universe (K)"},
+    {name:"mat",  type:"column", source:"source", allowedTypes:["number"], label:"Matched (K)"},
+    {name:"adr",  type:"column", source:"source", allowedTypes:["number"], label:"Addressable (K)"},
+    {name:"act",  type:"column", source:"source", allowedTypes:["number"], label:"Activated (K)"},
+    {name:"lift", type:"column", source:"source", allowedTypes:["number"], label:"Lift vs control (%)"}
+  ]);
+
+  function col(data,cfg,k){var id=cfg[k];return (id&&data&&data[id])?data[id]:null;}
+  function toRows(data,cfg){
+    var a=col(data,cfg,"aud"); if(!a||!a.length) return null;
+    var U=col(data,cfg,"uni"),M=col(data,cfg,"mat"),D=col(data,cfg,"adr"),T=col(data,cfg,"act"),L=col(data,cfg,"lift");
+    var out=[];
+    for(var i=0;i<a.length;i++){
+      out.push({a:a[i],u:U?Number(U[i])||0:0,m:M?Number(M[i])||0:0,d:D?Number(D[i])||0:0,
+                t:T?Number(T[i])||0:0,l:L?Number(L[i])||0:0});
+    }
+    out.sort(function(x,y){return y.t-x.t;});
+    return out;
+  }
+  // Object-vs-string element binding: normalise both.
+  function srcId(cfg){var s=cfg&&cfg.source; if(!s) return null; return (typeof s==="string")?s:(s.elementId||s.id||null);}
+
+  var unsub=null;
+  client.config.subscribe(function(cfg){
+    if(unsub){try{unsub();}catch(e){} unsub=null;}
+    var sid=srcId(cfg);
+    if(!sid){current=synth();render(current);return;}
+    unsub=client.elements.subscribeToElementData(sid,function(data){
+      var rows=toRows(data,cfg); gotData=true; IS_SYNTH=false; current=rows||[]; render(current);
+    });
+  });
+  render(current);
+})();
+</script>
+</body>
+</html>
